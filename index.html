@@ -1123,7 +1123,17 @@ function snapshot() {
   };
 }
 
+const AUTO_BACKUP = '⏪ 自動備份（覆蓋前）';
 function applySnapshot(data) {
+  // 保險：覆蓋現有內容前，先自動備份一份，誤按也救得回來
+  const had = pages.querySelectorAll('.sheet:not(.toc)').length;
+  if (had && db) {
+    try {
+      const tx = db.transaction('state', 'readwrite');
+      tx.objectStore('state').put(snapshot(), PROJ + AUTO_BACKUP);
+      tx.oncomplete = () => refreshProjList();
+    } catch (e) {}
+  }
   restoring = true;
   pages.querySelectorAll('.sheet').forEach(s => s.remove());
   tocTitles = data.tocTitles || [];
@@ -1184,6 +1194,9 @@ $('btnProjOpen').addEventListener('click', () => {
   const rq = db.transaction('state', 'readonly').objectStore('state').get(PROJ + name);
   rq.onsuccess = () => {
     if (!rq.result) return projMsg('找不到這個專案');
+    const n = (rq.result.images || []).length;
+    const had = pages.querySelectorAll('.sheet:not(.toc)').length;
+    if (!n && had && !confirm('這個專案是空的，開啟後畫面會清空（原內容會自動備份）。確定要開啟嗎？')) return;
     applySnapshot(rq.result);
     projMsg(`📂 已開啟專案「${name}」（${(rq.result.images||[]).length} 頁）`);
   };
