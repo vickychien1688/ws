@@ -827,7 +827,7 @@ async function cloudRawList(prefix) {
 /* 回傳 { folders: [中文資料夾名], items: [{name, folder}] } */
 async function cloudList() {
   const root = await cloudRawList('');
-  const folders = root.filter(f => f.id === null && /^f_[0-9a-f]+$/i.test(f.name)).map(f => keyToFolder(f.name));
+  const folders = root.filter(f => f.id === null && f.name !== '.emptyFolderPlaceholder').map(f => keyToFolder(f.name));
   const items = root.filter(f => f.name && f.name.endsWith('.json')).map(f => ({ name: keyToName(f.name), folder: '' }));
   for (const fo of folders) {
     const sub = await cloudRawList(folderToKey(fo) + '/');
@@ -1102,10 +1102,19 @@ $('btnCloudSave').addEventListener('click', async () => {
   const suggest = ($('cloudSel').value.split('|').pop()) || $('projSel').value || ('學習單 ' + new Date().toISOString().slice(0, 10));
   const name = prompt('雲端專案名稱（同名會覆蓋）：', suggest);
   if (!name) return;
+  // 直接在這裡選／輸入資料夾，不用先到側欄設定
+  const known = cloudCache.folders.length ? '\n現有資料夾：' + cloudCache.folders.join('、') : '';
+  const folderIn = prompt('要存到哪個資料夾？（留空＝放在最外層；輸入新名稱會自動建立）' + known, $('cloudFolder').value || '');
+  if (folderIn === null) return;
+  const chosenFolder = folderIn.trim();
+  if (chosenFolder && !cloudCache.folders.includes(chosenFolder)) {
+    try { await cloudCreateFolder(chosenFolder); } catch (e) {}
+  }
+  $('cloudFolder').value = chosenFolder;
   const btn = $('btnCloudSave');
   btn.disabled = true;
   try {
-    const folder = $('cloudFolder').value;
+    const folder = chosenFolder;
     const payload = await buildPayload();
     btn.textContent = '上傳中…';
     await cloudUpload(name, payload, folder);
