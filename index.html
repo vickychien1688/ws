@@ -614,6 +614,18 @@ const SB_KEY = 'sb_publishable_8-cmiPFlZNzWu4VyhMA7dA_B0hteB1u';
 const SB_BUCKET = 'ws-projects';
 let sbToken = null, sbEmail = null;
 
+/* Supabase 的檔名只接受英數，中文名稱轉成安全檔名（顯示時再轉回中文） */
+function nameToKey(name) {
+  const hex = Array.from(new TextEncoder().encode(name)).map(b => b.toString(16).padStart(2, '0')).join('');
+  return 'p_' + hex + '.json';
+}
+function keyToName(key) {
+  const m = /^p_([0-9a-f]+)\.json$/i.exec(key);
+  if (!m) return key.replace(/\.json$/, '');
+  const bytes = new Uint8Array(m[1].match(/../g).map(h => parseInt(h, 16)));
+  try { return new TextDecoder().decode(bytes); } catch (e) { return key; }
+}
+
 function cloudMsg(m) { setSaveInfo(m); }
 function sbHeaders(extra) {
   return Object.assign({ apikey: SB_KEY, Authorization: 'Bearer ' + (sbToken || SB_KEY) }, extra || {});
@@ -662,7 +674,7 @@ async function cloudList() {
   if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudList(); throw new Error('請重新登入'); }
   const d = await res.json();
   if (!Array.isArray(d)) throw new Error((d && d.message) || '讀取失敗');
-  return d.filter(f => f.name && f.name.endsWith('.json')).map(f => f.name.replace(/\.json$/, ''));
+  return d.filter(f => f.name && f.name.endsWith('.json')).map(f => keyToName(f.name));
 }
 
 async function refreshCloudList(selected) {
@@ -677,14 +689,21 @@ async function refreshCloudList(selected) {
 }
 
 async function cloudUpload(name, payloadText) {
-  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + encodeURIComponent(name + '.json');
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name);
   let res = await fetch(url, { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json', 'x-upsert': 'true' }), body: payloadText });
   if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudUpload(name, payloadText); }
-  if (!res.ok) { const t = await res.text(); throw new Error(t.slice(0, 120)); }
+  if (!res.ok) {
+    const t = await res.text();
+    let msg = t.slice(0, 150);
+    try { const j = JSON.parse(t); msg = j.message || j.error || msg; } catch (e) {}
+    if (res.status === 413 || /too large|exceeded/i.test(msg)) msg = '檔案太大，請減少頁數或分成兩份專案';
+    if (res.status === 403) msg = '沒有權限（請重新登入）';
+    throw new Error(msg);
+  }
 }
 
 async function cloudDownload(name) {
-  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + encodeURIComponent(name + '.json');
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name);
   let res = await fetch(url, { headers: sbHeaders() });
   if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudDownload(name); }
   if (!res.ok) throw new Error('下載失敗');
