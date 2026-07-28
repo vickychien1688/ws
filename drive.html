@@ -63,7 +63,7 @@
   #prev.show { display: flex; }
   #prevBar { padding: 12px 18px; color: #fff; display: flex; gap: 12px; align-items: center; }
   #prevBar button { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #46617c; color: #fff; }
-  #prevBody { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #prevBody { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 16px; }
   #prevBody img { max-width: 100%; max-height: 100%; background: #fff; }
   #prevBody iframe { width: 100%; height: 100%; border: none; background: #fff; }
 </style>
@@ -356,7 +356,53 @@ async function render() {
 }
 
 /* ===== 預覽 ===== */
-let prevBlobUrl = null;
+let prevBlobUrl = null, pdfjsReady = null;
+
+/* 用 pdf.js 把 PDF 畫成圖片，避免 Chrome「PDF 一律下載」設定導致看不到內容 */
+function loadPdfJs() {
+  if (pdfjsReady) return pdfjsReady;
+  pdfjsReady = new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js';
+    s.onload = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+      res(window.pdfjsLib);
+    };
+    s.onerror = () => rej(new Error('PDF 元件載入失敗'));
+    document.head.appendChild(s);
+  });
+  return pdfjsReady;
+}
+
+async function renderPdf(buf) {
+  const box = $('prevBody');
+  box.innerHTML = '<div style="color:#fff">PDF 載入中…</div>';
+  try {
+    const lib = await loadPdfJs();
+    const doc = await lib.getDocument({ data: buf.slice(0) }).promise;
+    box.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:14px;align-items:center;width:100%';
+    box.appendChild(wrap);
+    const maxW = Math.min(box.clientWidth - 40, 1000);
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const v1 = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: maxW / v1.width });
+      const c = document.createElement('canvas');
+      c.width = viewport.width; c.height = viewport.height;
+      c.style.cssText = 'width:100%;max-width:' + maxW + 'px;background:#fff;box-shadow:0 3px 12px rgba(0,0,0,.4)';
+      wrap.appendChild(c);
+      await page.render({ canvasContext: c.getContext('2d'), viewport }).promise;
+      const label = document.createElement('div');
+      label.textContent = `第 ${i} / ${doc.numPages} 頁`;
+      label.style.cssText = 'color:#9ab;font-size:13px';
+      wrap.appendChild(label);
+    }
+  } catch (e) {
+    box.innerHTML = `<div style="color:#fff">PDF 顯示失敗：${e.message}<br><br>可按右上角「⬇ 下載」用預覽程式開啟</div>`;
+  }
+}
 const MIME = { pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif',
   webp:'image/webp', bmp:'image/bmp', svg:'image/svg+xml', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
   mp3:'audio/mpeg', wav:'audio/wav', m4a:'audio/mp4', txt:'text/plain' };
@@ -388,7 +434,7 @@ async function preview(key, name) {
     prevBlobUrl = URL.createObjectURL(new Blob([buf], { type: MIME[e] || 'application/octet-stream' }));
     $('prevName').textContent = name;
     if (isImg) $('prevBody').innerHTML = `<img src="${prevBlobUrl}">`;
-    else if (isPdf) $('prevBody').innerHTML = `<iframe src="${prevBlobUrl}#view=FitH"></iframe>`;
+    else if (isPdf) await renderPdf(buf);
     else if (isVid) $('prevBody').innerHTML = `<video src="${prevBlobUrl}" controls style="max-width:100%;max-height:100%"></video>`;
     else if (isAud) $('prevBody').innerHTML = `<audio src="${prevBlobUrl}" controls style="width:80%"></audio>`;
     else {
