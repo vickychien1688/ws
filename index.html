@@ -53,6 +53,12 @@
   #panel details[open] summary::before { content: '▾ '; }
   #panel .grp { display: flex; flex-direction: column; gap: 8px; padding: 8px 2px 4px; }
   #panel .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .xtcard {
+    background: rgba(0,0,0,.22); border-radius: 8px; padding: 8px; margin-bottom: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .xtcard .xthead { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #cfe; }
+  .xtcard .xthead button { background: #c0392b; color: #fff; padding: 3px 9px; font-size: 12px; }
   #panel label { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
   #panel input[type=number] { width: 66px; padding: 5px; border: none; border-radius: 5px; }
   #panel input[type=text] { flex: 1; min-width: 0; padding: 5px; border: none; border-radius: 5px; }
@@ -112,6 +118,8 @@
     font-size: var(--pn-size); font-weight: bold;
     line-height: 1; color: #000;
   }
+
+  .xtext { position: absolute; color: #000; background: #fff; padding: 0 3px; line-height: 1.3; white-space: pre; }
 
   .footer { /* 頁尾文字（班級/日期等） */
     position: absolute; bottom: 0.15cm;
@@ -378,6 +386,10 @@
       <div class="row2">
         <label title="靠左時＝往右移；靠右時＝往左移；置中時＝正值往右、負值往左">左右 <input type="number" id="ftGapX" value="0.8" step="0.1"> cm</label>
       </div>
+      <hr style="border:none;border-top:1px solid rgba(255,255,255,.2);margin:6px 0">
+      <div id="xtList"></div>
+      <button id="btnAddText" style="background:#27ae60;color:#fff">＋ 新增一段文字</button>
+      <input type="hidden" id="extraTexts" value="[]">
     </div>
   </details>
 
@@ -1497,6 +1509,66 @@ const FT_FONTS = {
   round: '"Yuanti TC","Microsoft JhengHei",sans-serif',
 };
 
+/* ===== 額外文字方塊（可新增多段，各自設定位置與字型） ===== */
+function getExtras() {
+  try { const a = JSON.parse($('extraTexts').value || '[]'); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+function setExtras(arr, rerenderUI) {
+  $('extraTexts').value = JSON.stringify(arr);
+  if (rerenderUI !== false) renderExtraUI();
+  refresh();
+}
+const XT_POS = [['bottom-right','右下'],['bottom-left','左下'],['bottom-center','下方置中'],
+                ['top-right','右上'],['top-left','左上'],['top-center','上方置中']];
+
+function renderExtraUI() {
+  const box = $('xtList');
+  const arr = getExtras();
+  box.innerHTML = '';
+  arr.forEach((it, i) => {
+    const card = document.createElement('div');
+    card.className = 'xtcard';
+    card.innerHTML = `
+      <div class="xthead"><b>文字 ${i + 1}</b><button data-del="${i}">刪除</button></div>
+      <input type="text" data-k="text" placeholder="要顯示的文字">
+      <label>位置 <select data-k="pos">${XT_POS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
+      <div class="row2">
+        <label>字型 <select data-k="font">
+          <option value="sans">黑體</option><option value="serif">明體</option>
+          <option value="kai">楷體</option><option value="round">圓體</option></select></label>
+      </div>
+      <div class="row2">
+        <label>粗細 <select data-k="weight">
+          <option value="400">標準</option><option value="700">粗體</option><option value="300">細體</option></select></label>
+        <label>字級 <input type="number" data-k="size" step="1" min="6" style="width:60px"> pt</label>
+      </div>
+      <div class="row2">
+        <label>上下 <input type="number" data-k="gap" step="0.05" min="0" style="width:60px"> cm</label>
+        <label>左右 <input type="number" data-k="gapX" step="0.1" style="width:60px"> cm</label>
+      </div>`;
+    card.querySelectorAll('[data-k]').forEach(el => {
+      const k = el.dataset.k;
+      el.value = it[k];
+      el.addEventListener('input', () => {
+        const cur = getExtras();
+        cur[i][k] = (el.type === 'number') ? (parseFloat(el.value) || 0) : el.value;
+        setExtras(cur, false);
+      });
+    });
+    card.querySelector('[data-del]').addEventListener('click', () => {
+      const cur = getExtras(); cur.splice(i, 1); setExtras(cur);
+    });
+    box.appendChild(card);
+  });
+}
+
+$('btnAddText').addEventListener('click', () => {
+  const cur = getExtras();
+  cur.push({ text: '', pos: 'bottom-right', font: 'sans', weight: '400', size: 10, gap: 0.5, gapX: 1.0 });
+  setExtras(cur);
+});
+
 /* 頁碼實際靠哪一邊（外側模式依單雙頁決定） */
 function resolvePnSide(o, i) {
   if (o.pnPos === 'outer') return (o.mirror && i % 2 === 1) ? 'left' : 'right';
@@ -1600,6 +1672,30 @@ function refresh() {
       pn.style.paddingRight = (mirrored ? o.bind + 0.8 : 0.8) + 'cm';
     }
 
+    // 額外文字方塊
+    s.querySelectorAll('.xtext').forEach(x => x.remove());
+    getExtras().forEach(it => {
+      if (!it.text) return;
+      const el = document.createElement('div');
+      el.className = 'xtext';
+      el.textContent = it.text;
+      el.style.fontFamily = FT_FONTS[it.font] || FT_FONTS.sans;
+      el.style.fontWeight = it.weight;
+      el.style.fontSize = (it.size || 10) + 'pt';
+      const [v, hh] = (it.pos || 'bottom-right').split('-');
+      el.style.top = v === 'top' ? (it.gap || 0) + 'cm' : 'auto';
+      el.style.bottom = v === 'bottom' ? (it.gap || 0) + 'cm' : 'auto';
+      if (hh === 'center') {
+        el.style.left = '50%'; el.style.right = 'auto';
+        el.style.transform = `translateX(calc(-50% + ${it.gapX || 0}cm))`;
+      } else if (hh === 'left') {
+        el.style.left = ((mirrored ? 0 : o.bind) + (it.gapX || 0)) + 'cm'; el.style.right = 'auto';
+      } else {
+        el.style.right = ((mirrored ? o.bind : 0) + (it.gapX || 0)) + 'cm'; el.style.left = 'auto';
+      }
+      s.appendChild(el);
+    });
+
     // 頁尾文字：位置可選（自動＝頁碼對面）
     const ft = s.querySelector('.footer');
     if (ft) {
@@ -1657,7 +1753,7 @@ $('zoomSlider').addEventListener('input', () => {   // 拉滑桿＝切到自訂�
   refresh();
 });
 
-const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap','ftGapX'];
+const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap','ftGapX','extraTexts'];
 SETTING_IDS.forEach(id => $(id).addEventListener('input', refresh));
 refresh();
 
@@ -1719,6 +1815,7 @@ function applySnapshot(data) {
   });
   (data.images || []).forEach(b => addBlob(b));
   restoring = false;
+  renderExtraUI();
   refresh();
 }
 
@@ -1842,6 +1939,7 @@ function restoreState() {
       });
       data.images.forEach(b => addBlob(b));
       restoring = false;
+      renderExtraUI();
       refresh();
       res(data.images.length);
     };
@@ -1899,6 +1997,22 @@ function drawFooterAndPn(g, o, i, num, W, H) {
     const cx = side === 'center' ? W / 2 : (side === 'left' ? padL + r : W - padR - r);
     drawCircleNum(g, num, cx, cy, pnPx);
   }
+  // 額外文字方塊
+  getExtras().forEach(it => {
+    if (!it.text) return;
+    const [v, hh] = (it.pos || 'bottom-right').split('-');
+    const fPx = pt2px(it.size || 10);
+    g.fillStyle = '#000';
+    g.font = (it.weight || '400') + ' ' + fPx + 'px ' + (FT_FONTS[it.font] || FT_FONTS.sans);
+    g.textBaseline = v === 'top' ? 'top' : 'bottom';
+    const y = v === 'top' ? cm2px(it.gap || 0) : H - cm2px(it.gap || 0);
+    const l = cm2px((mirrored ? 0 : o.bind) + (it.gapX || 0));
+    const r = cm2px((mirrored ? o.bind : 0) + (it.gapX || 0));
+    if (hh === 'center') { g.textAlign = 'center'; g.fillText(it.text, W / 2 + cm2px(it.gapX || 0), y); }
+    else if (hh === 'left') { g.textAlign = 'left'; g.fillText(it.text, l, y); }
+    else { g.textAlign = 'right'; g.fillText(it.text, W - r, y); }
+  });
+
   if (o.footer) {
     const pos = resolveFtPos(o, i);
     const fPx = pt2px(o.ftSize);
