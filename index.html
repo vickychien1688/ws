@@ -279,6 +279,9 @@
     <button id="btnProjSave" style="background:#8e44ad;color:#fff">💾 存成專案</button>
     <button id="btnProjOpen" style="background:#16a085;color:#fff">📂 開啟</button>
     <button id="btnProjDel" style="background:#c0392b;color:#fff">🗑 刪除</button>
+    <button id="btnExport" style="background:#d35400;color:#fff" title="把目前所有頁面與設定存成搬家檔">📤 匯出</button>
+    <button id="btnImport" style="background:#16a085;color:#fff" title="讀取搬家檔，把頁面與設定搬進來">📥 匯入</button>
+    <input type="file" id="importFile" accept=".json,application/json" multiple hidden>
   </span>
 
   <button id="btnDownload">⬇ 下載 PDF</button>
@@ -548,6 +551,117 @@ $('eddelete').addEventListener('click', () => {
   edObjects.splice(edSel, 1);
   edSel = -1;
   edRedraw();
+});
+
+/* ===== 搬家：匯出 / 匯入（跨網站、跨電腦都可用） =====
+   匯出成 .json 檔（圖片以 base64 存放）；超過大小上限會自動拆成多個檔案。
+   線上沙盒環境（artifact）走 window.claude.downloads，一般網站直接下載。 */
+const EXPORT_CHUNK_BYTES = 7 * 1024 * 1024;   // 每個檔案上限，保守值
+
+function blobToDataUrl(b) {
+  return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
+}
+function dataUrlToBlob(u) {
+  const [head, b64] = u.split(',');
+  const mime = (head.match(/:(.*?);/) || [null, 'image/png'])[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], {type: mime});
+}
+
+async function saveExportFile(name, text) {
+  if (window.claude && window.claude.downloads) {
+    for (let waits = 0; ; waits++) {
+      try { await window.claude.downloads.save({filename: name, data: text}); return; }
+      catch (err) {
+        if (err && err.code === 'rate_limited' && waits < 6) { await new Promise(r => setTimeout(r, 1800)); continue; }
+        throw err;
+      }
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+  a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+$('btnExport').addEventListener('click', async () => {
+  const btn = $('btnExport');
+  const sheets = [...pages.querySelectorAll('.sheet:not(.toc)')];
+  if (!sheets.length) return projMsg('請先加入圖片再匯出');
+  btn.disabled = true;
+  try {
+    const settings = {};
+    SETTING_IDS.forEach(id => { const el = $(id); settings[id] = el.type === 'checkbox' ? el.checked : el.value; });
+    // 逐頁轉成 base64，依大小切成多個檔案
+    const parts = [];
+    let cur = [], curSize = 0;
+    for (let i = 0; i < sheets.length; i++) {
+      btn.textContent = `打包第 ${i + 1}/${sheets.length} 頁…`;
+      const url = await blobToDataUrl(sheets[i]._blob);
+      if (curSize + url.length > EXPORT_CHUNK_BYTES && cur.length) { parts.push(cur); cur = []; curSize = 0; }
+      cur.push(url); curSize += url.length;
+    }
+    if (cur.length) parts.push(cur);
+
+    for (let p = 0; p < parts.length; p++) {
+      const payload = {
+        _type: 'a4tool-export', version: 1,
+        part: p + 1, totalParts: parts.length,
+        settings: p === 0 ? settings : null,
+        tocTitles: p === 0 ? tocTitles : null,
+        images: parts[p],
+      };
+      const name = parts.length > 1
+        ? `A4搬家檔-${p + 1}of${parts.length}.json`
+        : 'A4搬家檔.json';
+      btn.textContent = `儲存檔案 ${p + 1}/${parts.length}…`;
+      await saveExportFile(name, JSON.stringify(payload));
+      if (p < parts.length - 1) await new Promise(r => setTimeout(r, 900));
+    }
+    btn.textContent = '✅ 已匯出';
+    projMsg(parts.length > 1
+      ? `已匯出 ${sheets.length} 頁，共 ${parts.length} 個檔案 — 匯入時請一次選取全部`
+      : `已匯出 ${sheets.length} 頁（A4搬家檔.json）— 到新網站按「📥 匯入」選這個檔案`);
+  } catch (err) {
+    btn.textContent = '匯出失敗';
+    projMsg('匯出失敗：' + ((err && (err.code || err.message)) || err));
+  }
+  setTimeout(() => { btn.textContent = '📤 匯出'; btn.disabled = false; }, 3000);
+});
+
+$('btnImport').addEventListener('click', () => $('importFile').click());
+
+$('importFile').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  $('importFile').value = '';
+  if (!files.length) return;
+  try {
+    const datas = [];
+    for (const f of files) datas.push(JSON.parse(await f.text()));
+    if (!datas.every(d => d && d._type === 'a4tool-export')) return projMsg('這不是本工具的搬家檔');
+    datas.sort((a, b) => (a.part || 1) - (b.part || 1));
+    const head = datas.find(d => d.settings) || {};
+    restoring = true;
+    pages.querySelectorAll('.sheet').forEach(s => s.remove());
+    tocTitles = head.tocTitles || [];
+    if (head.settings) SETTING_IDS.forEach(id => {
+      if (!(id in head.settings)) return;
+      const el = $(id);
+      if (el.type === 'checkbox') el.checked = head.settings[id];
+      else el.value = head.settings[id];
+    });
+    let n = 0;
+    for (const d of datas) for (const u of (d.images || [])) { addBlob(dataUrlToBlob(u)); n++; }
+    restoring = false;
+    refresh();
+    projMsg(`📥 已匯入 ${n} 頁，設定也一起還原了 — 記得按「💾 存成專案」保存`);
+  } catch (err) {
+    restoring = false;
+    projMsg('匯入失敗：' + (err.message || err));
+  }
 });
 
 function edPushUndo() {
