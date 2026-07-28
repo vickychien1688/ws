@@ -40,7 +40,12 @@
   }
 
   /* ===== 頁面 ===== */
-  #pages { display: flex; flex-direction: column; align-items: center; gap: 20px; padding: 20px 0; }
+  #pages {
+    display: grid;
+    grid-template-columns: repeat(var(--cols, 1), 210mm);
+    justify-content: center; align-content: start;
+    gap: 20px; padding: 20px 0;
+  }
   .sheet {
     width: 210mm; height: 297mm;
     background: #fff; position: relative;
@@ -137,6 +142,8 @@
   .sheet.dragging { opacity: .35; outline: 3px dashed #2980b9; }
   .sheet.drop-before { box-shadow: 0 -8px 0 -2px #2980b9, 0 3px 12px rgba(0,0,0,.25); }
   .sheet.drop-after  { box-shadow: 0 8px 0 -2px #2980b9, 0 3px 12px rgba(0,0,0,.25); }
+  body.multicol .sheet.drop-before { box-shadow: -8px 0 0 -2px #2980b9, 0 3px 12px rgba(0,0,0,.25); }
+  body.multicol .sheet.drop-after  { box-shadow: 8px 0 0 -2px #2980b9, 0 3px 12px rgba(0,0,0,.25); }
 
   /* ===== 簡單修圖 ===== */
   #editor {
@@ -172,7 +179,7 @@
     @page { size: A4 portrait; margin: 0; }
     body { background: #fff; }
     #panel, #hint, .toolbar, .bindline, #empty { display: none !important; }
-    #pages { display: block; padding: 0; gap: 0; zoom: 1 !important; }
+    #pages { display: block !important; padding: 0; gap: 0; zoom: 1 !important; }
     .sheet {
       box-shadow: none; margin: 0;
       page-break-after: always; break-after: page;
@@ -188,6 +195,14 @@
   <button id="btnAdd">＋ 加入圖片</button>
   <input type="file" id="fileInput" accept="image/*" multiple hidden>
 
+  <label title="一列要放幾張，方便拖曳搬移">版面
+    <select id="gridCols">
+      <option value="1" selected>單張</option>
+      <option value="2">一列 2 張</option>
+      <option value="3">一列 3 張</option>
+      <option value="4">一列 4 張</option>
+    </select>
+  </label>
   <label>檢視大小
     <select id="viewZoom">
       <option value="fit" selected>一頁全覽</option>
@@ -291,7 +306,7 @@
 
 <div id="hint">
   💡 推薦用「⬇ 下載 PDF」拿到檔案再列印，最穩定。直接列印請選：<b>邊界（Margins）＝無</b>、<b>縮放＝100%</b>、紙張 A4。
-  也可直接把圖片拖曳到本頁面加入。每頁右上角可 ✏️ 修圖（蓋掉不要的字）、✕ 刪除；<b>按住 ✥ 把手上下拖曳就能調整頁面順序</b>。目錄頁的標題直接點擊就能輸入。
+  也可直接把圖片拖曳到本頁面加入。每頁右上角可 ✏️ 修圖（蓋掉不要的字）、✕ 刪除；<b>按住 ✥ 把手拖曳可調整順序，<b>⤒ 移到最前、🔢 直接輸入要移到第幾張、⤓ 移到最後</b>（不用拖很遠）；「版面」可切成一列 2～4 張，搬移更方便</b>。目錄頁的標題直接點擊就能輸入。
   <br>📐 <b id="areaInfo"></b>
   <br>💾 <b id="saveInfo">自動暫存準備中…</b>　｜　📁 做好的冊子按「💾 存成專案」可長期保存，下次從下拉選單「📂 開啟」就能繼續編輯
   <span id="dlrow" style="display:none"><br>📄 <a id="manualDl" style="color:#b03;font-weight:bold"></a></span>
@@ -384,6 +399,9 @@ function addBlob(blob) {
     <div class="bindline"></div>
     <div class="toolbar">
       <div class="drag-handle" draggable="true" title="按住這裡拖曳，就能調整頁面順序">✥</div>
+      <button data-act="first" title="一鍵移到最前面">⤒</button>
+      <button data-act="goto" title="移到第幾張（輸入數字）">🔢</button>
+      <button data-act="last" title="一鍵移到最後面">⤓</button>
       <button data-act="edit" title="修圖（蓋掉不要的字）">✏️</button>
       <button data-act="del" title="刪除">✕</button>
     </div>`;
@@ -395,7 +413,30 @@ pages.addEventListener('click', e => {
   const b = e.target.closest('button[data-act]');
   if (!b) return;
   const s = b.closest('.sheet');
-  if (b.dataset.act === 'del') {
+  if (b.dataset.act === 'goto') {
+    const list = [...pages.querySelectorAll('.sheet:not(.toc)')];
+    const cur = list.indexOf(s) + 1;
+    const ans = prompt(`這是第 ${cur} 張，要移到第幾張？（1 ～ ${list.length}）`, cur);
+    if (ans === null) return;
+    let n = parseInt(ans);
+    if (!n || n < 1) n = 1;
+    if (n > list.length) n = list.length;
+    const rest = list.filter(x => x !== s);
+    const target = rest[n - 1];
+    if (target) pages.insertBefore(s, target);
+    else pages.appendChild(s);
+    refresh();
+    s.scrollIntoView({block: 'center', behavior: 'smooth'});
+    return;
+  }
+  if (b.dataset.act === 'first') {
+    const first = pages.querySelector('.sheet');
+    if (first && first !== s) pages.insertBefore(s, first);
+    s.scrollIntoView({block: 'center', behavior: 'smooth'});
+  } else if (b.dataset.act === 'last') {
+    pages.appendChild(s);
+    s.scrollIntoView({block: 'center', behavior: 'smooth'});
+  } else if (b.dataset.act === 'del') {
     s.remove();
   } else if (b.dataset.act === 'edit') {
     openEditor(s);
@@ -426,7 +467,9 @@ pages.addEventListener('dragover', e => {
        .forEach(s => s.classList.remove('drop-before', 'drop-after'));
   if (!over || over === dragSrc) return;
   const r = over.getBoundingClientRect();
-  over.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+  const cols = parseInt($('gridCols').value) || 1;
+  const before = cols > 1 ? (e.clientX < r.left + r.width / 2) : (e.clientY < r.top + r.height / 2);
+  over.classList.add(before ? 'drop-before' : 'drop-after');
 });
 
 pages.addEventListener('drop', e => {
@@ -436,7 +479,9 @@ pages.addEventListener('drop', e => {
   const over = e.target.closest('.sheet');
   if (over && over !== dragSrc) {
     const r = over.getBoundingClientRect();
-    if (e.clientY < r.top + r.height / 2) pages.insertBefore(dragSrc, over);
+    const cols = parseInt($('gridCols').value) || 1;
+    const before = cols > 1 ? (e.clientX < r.left + r.width / 2) : (e.clientY < r.top + r.height / 2);
+    if (before) pages.insertBefore(dragSrc, over);
     else pages.insertBefore(dragSrc, over.nextSibling);
   }
   endDrag();
@@ -1013,12 +1058,17 @@ function refresh() {
 /* 檢視大小：只影響螢幕預覽，列印與 PDF 不受影響 */
 function applyViewZoom() {
   const v = $('viewZoom').value;
+  const cols = parseInt($('gridCols').value) || 1;
+  pages.style.setProperty('--cols', cols);
+  document.body.classList.toggle('multicol', cols > 1);
   let z;
   if (v === 'fit') {
     const availH = window.innerHeight - $('panel').offsetHeight - $('hint').offsetHeight - 60;
     const availW = document.documentElement.clientWidth - 40;
-    z = Math.min(availH / 1123, availW / 794, 1);   // A4 在螢幕上約 794×1123px
-    z = Math.max(z, 0.2);
+    // A4 在螢幕上約 794×1123px；多欄時以寬度為主，讓整列剛好排得下
+    const byW = (availW - (cols - 1) * 20) / (cols * 794);
+    z = cols === 1 ? Math.min(availH / 1123, byW, 1) : Math.min(byW, 1);
+    z = Math.max(z, 0.1);
   } else if (v === 'custom') {
     z = $('zoomSlider').value / 100;
   } else {
@@ -1033,7 +1083,7 @@ $('zoomSlider').addEventListener('input', () => {   // 拉滑桿＝切到自訂�
   refresh();
 });
 
-const SETTING_IDS = ['viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize'];
+const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize'];
 SETTING_IDS.forEach(id => $(id).addEventListener('input', refresh));
 refresh();
 
