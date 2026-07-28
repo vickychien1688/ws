@@ -959,6 +959,24 @@ async function cloudUpload(name, payloadText, folder) {
   }
 }
 
+/* 同時存一份 PDF，讓雲端硬碟裡可以直接預覽/列印 */
+async function cloudUploadPdf(name, folder) {
+  const bytes = makePdfBytes();
+  if (!bytes) return;
+  const parts = [ROOT_KEY];
+  if (folder) parts.push(safeSeg(folder));
+  parts.push(safeSeg(name + '.pdf'));
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + parts.join('/');
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: sbHeaders({ 'Content-Type': 'application/pdf', 'x-upsert': 'true' }),
+    body: new Blob([bytes], { type: 'application/pdf' }),
+  });
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudUploadPdf(name, folder); }
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+  return Math.round(bytes.length / 1048576 * 10) / 10;
+}
+
 async function cloudDownload(name, folder) {
   const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name, folder);
   let res = await fetch(url, { headers: sbHeaders() });
@@ -1014,10 +1032,15 @@ $('btnCloudSave').addEventListener('click', async () => {
     const payload = await buildPayload();
     btn.textContent = '上傳中…';
     await cloudUpload(name, payload, folder);
+    btn.textContent = '產生 PDF…';
+    let pdfMB = null;
+    try { pdfMB = await cloudUploadPdf(name, folder); } catch (e) { /* PDF 失敗不影響專案存檔 */ }
     if (folder && !cloudCache.folders.includes(folder)) cloudCache.folders.push(folder);
     await refreshCloudList(name);
     btn.textContent = '✅ 已存雲端';
-    cloudMsg(`☁️ 已存到雲端${folder ? '資料夾「' + folder + '」' : ''}：「${name}」（${Math.round(payload.length / 1048576 * 10) / 10} MB）— 任何裝置登入都看得到`);
+    cloudMsg(`☁️ 已存到雲端${folder ? '資料夾「' + folder + '」' : ''}：「${name}」` +
+      `（專案檔 ${Math.round(payload.length / 1048576 * 10) / 10} MB` +
+      (pdfMB ? `＋PDF ${pdfMB} MB` : '') + '）— 雲端硬碟裡可直接開 PDF 看或列印');
   } catch (e) {
     btn.textContent = '存雲端失敗';
     cloudMsg('存到雲端失敗：' + e.message);
