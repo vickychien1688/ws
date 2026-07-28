@@ -783,6 +783,20 @@ $('cloudFolder').addEventListener('change', () => renderCloudSelects());
 /* ===== 雲端管理視窗（瀏覽 / 改名 / 搬移 / 刪除） ===== */
 let cmFolder = null;   // null = 首頁（看資料夾），字串 = 進入該資料夾
 
+/* 真正在雲端建立資料夾：放一個看不見的佔位檔（Supabase 官方做法） */
+async function cloudCreateFolder(folder) {
+  const key = folderToKey(folder) + '/.emptyFolderPlaceholder';
+  const res = await fetch(SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + key, {
+    method: 'POST', headers: sbHeaders({ 'Content-Type': 'text/plain', 'x-upsert': 'true' }), body: '',
+  });
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudCreateFolder(folder); }
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+}
+async function cloudDeleteFolder(folder) {
+  const inside = await cloudRawList(folderToKey(folder) + '/');
+  for (const f of inside) await cloudDelete(folderToKey(folder) + '/' + f.name);
+}
+
 async function cloudMove(fromKey, toKey) {
   const res = await fetch(SB_URL + '/storage/v1/object/move', {
     method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }),
@@ -824,10 +838,20 @@ async function cmRender() {
         div.style.cursor = 'pointer';
         div.onclick = () => { cmFolder = null; cmRender(); };
       } else if (r.type === 'folder') {
-        div.innerHTML = `<span class="cmicon">📁</span><span class="cmname">${r.name}</span>
+        div.innerHTML = `<span class="cmicon">📁</span><span class="cmname" style="cursor:pointer">${r.name}</span>
           <span class="cmmeta">資料夾</span>`;
-        div.style.cursor = 'pointer';
-        div.onclick = () => { cmFolder = r.name; cmRender(); };
+        div.querySelector('.cmname').onclick = () => { cmFolder = r.name; cmRender(); };
+        const del = document.createElement('button');
+        del.textContent = '刪除資料夾'; del.className = 'del';
+        del.onclick = async () => {
+          const inside = await cloudRawList(folderToKey(r.name) + '/');
+          const files = inside.filter(f => f.name && f.name.endsWith('.json'));
+          if (files.length && !confirm(`資料夾「${r.name}」裡有 ${files.length} 個專案，確定要全部刪除？`)) return;
+          if (!files.length && !confirm(`確定要刪除空資料夾「${r.name}」？`)) return;
+          try { await cloudDeleteFolder(r.name); await refreshCloudList(); await cmRender(); }
+          catch (e) { alert('刪除失敗：' + e.message); }
+        };
+        div.appendChild(del);
       } else {
         div.innerHTML = `<span class="cmicon">📄</span><span class="cmname">${r.name}</span>
           <span class="cmmeta">${fmtSize(r.size)}　${fmtDate(r.updated)}</span>`;
@@ -886,25 +910,30 @@ $('btnCloudMgr').addEventListener('click', async () => {
 });
 $('cmClose').addEventListener('click', () => { $('cloudMgr').hidden = true; });
 $('cmRefresh').addEventListener('click', cmRender);
-$('cmNewFolder').addEventListener('click', () => {
+$('cmNewFolder').addEventListener('click', async () => {
   const name = prompt('新資料夾名稱：');
   if (!name) return;
-  if (!cloudCache.folders.includes(name)) cloudCache.folders.push(name);
-  renderCloudSelects();
-  $('cloudFolder').value = name;
-  renderCloudSelects();
-  alert(`已建立資料夾「${name}」。\n\n注意：雲端資料夾要「放進第一個專案」才會真正出現，\n關閉這個視窗後按「☁️⬆ 存到雲端」即可。`);
+  $('cmInfo').textContent = '建立中…';
+  try {
+    await cloudCreateFolder(name.trim());
+    await refreshCloudList();
+    await cmRender();
+    $('cmInfo').textContent = `已建立資料夾「${name.trim()}」`;
+  } catch (e) { alert('建立資料夾失敗：' + e.message); }
 });
 
-$('btnFolderNew').addEventListener('click', () => {
+$('btnFolderNew').addEventListener('click', async () => {
   if (!sbToken) return cloudMsg('請先按「🔑 登入」');
   const name = prompt('新資料夾名稱（例如：2026 暑期、EOW 教材）：');
   if (!name) return;
-  if (!cloudCache.folders.includes(name)) cloudCache.folders.push(name);
-  renderCloudSelects();
-  $('cloudFolder').value = name;
-  renderCloudSelects();
-  cloudMsg(`📁 已建立資料夾「${name}」— 按「☁️⬆ 存到雲端」時會存進這個資料夾`);
+  cloudMsg('建立資料夾中…');
+  try {
+    await cloudCreateFolder(name.trim());
+    await refreshCloudList();
+    $('cloudFolder').value = name.trim();
+    renderCloudSelects();
+    cloudMsg(`📁 已在雲端建立資料夾「${name.trim()}」— 現在按「☁️⬆ 存到雲端」就會存進去`);
+  } catch (e) { cloudMsg('建立資料夾失敗：' + e.message); }
 });
 
 async function cloudUpload(name, payloadText, folder) {
