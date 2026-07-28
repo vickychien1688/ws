@@ -663,31 +663,38 @@ $('eddelete').addEventListener('click', () => {
    登入後專案存在雲端，換電腦或清瀏覽器資料都不會不見。 */
 const SB_URL = 'https://nvnrkzveyehcnlaszzin.supabase.co';
 const SB_KEY = 'sb_publishable_8-cmiPFlZNzWu4VyhMA7dA_B0hteB1u';
-const SB_BUCKET = 'ws-projects';
+const SB_BUCKET = 'vicky-drive';        // 與雲端硬碟同一個空間
+const ROOT_DISPLAY = '學習單專案';        // 專案統一放在這個資料夾
 let sbToken = null, sbEmail = null;
 
 /* Supabase 的檔名只接受英數，中文名稱轉成安全檔名（顯示時再轉回中文） */
-function enc(s) {
-  return Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, '0')).join('');
+/* 與雲端硬碟共用的編碼規則：非英數的名稱轉 n_<hex>，副檔名保留 */
+function encName(s) {
+  return 'n_' + Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
-function dec(hex) {
-  try { return new TextDecoder().decode(new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16)))); }
-  catch (e) { return hex; }
+function decName(s) {
+  const m = /^n_([0-9a-f]+)(\..+)?$/i.exec(s);
+  if (!m) return s;
+  try { return new TextDecoder().decode(new Uint8Array(m[1].match(/../g).map(x => parseInt(x, 16)))) + (m[2] || ''); }
+  catch (e) { return s; }
 }
-/* 路徑：f_<資料夾>/p_<專案>.json；沒有資料夾就直接放根目錄 */
+function safeSeg(seg) {
+  if (/^[A-Za-z0-9._\- ]+$/.test(seg)) return seg;
+  const dot = seg.lastIndexOf('.');
+  return dot > 0 ? encName(seg.slice(0, dot)) + seg.slice(dot) : encName(seg);
+}
+const ROOT_KEY = safeSeg(ROOT_DISPLAY);
+
+/* 專案檔路徑（相對於 bucket）：學習單專案/<資料夾>/<名稱>.json */
 function nameToKey(name, folder) {
-  const file = 'p_' + enc(name) + '.json';
-  return folder ? 'f_' + enc(folder) + '/' + file : file;
+  const parts = [ROOT_KEY];
+  if (folder) parts.push(safeSeg(folder));
+  parts.push(safeSeg(name + '.json'));
+  return parts.join('/');
 }
-function keyToName(key) {
-  const m = /^p_([0-9a-f]+)\.json$/i.exec(key);
-  return m ? dec(m[1]) : key.replace(/\.json$/, '');
-}
-function folderToKey(folder) { return 'f_' + enc(folder); }
-function keyToFolder(key) {
-  const m = /^f_([0-9a-f]+)$/i.exec(key);
-  return m ? dec(m[1]) : key;
-}
+function keyToName(key) { return decName(key).replace(/\.json$/, ''); }
+function folderToKey(folder) { return ROOT_KEY + '/' + safeSeg(folder); }
+function keyToFolder(key) { return decName(key); }
 
 function cloudMsg(m) { setSaveInfo(m); }
 function sbHeaders(extra) {
@@ -730,9 +737,10 @@ async function cloudRefresh() {
 }
 
 async function cloudRawList(prefix) {
+  const p = prefix ? prefix : ROOT_KEY + '/';   // 沒指定就列「學習單專案」底下
   const res = await fetch(SB_URL + '/storage/v1/object/list/' + SB_BUCKET, {
     method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ prefix: prefix || '', limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
+    body: JSON.stringify({ prefix: p, limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
   });
   if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudRawList(prefix); throw new Error('請重新登入'); }
   const d = await res.json();
