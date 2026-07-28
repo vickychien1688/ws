@@ -748,6 +748,7 @@ const SB_KEY = 'sb_publishable_8-cmiPFlZNzWu4VyhMA7dA_B0hteB1u';
 const SB_BUCKET = 'vicky-drive';        // 與雲端硬碟同一個空間
 const ROOT_DISPLAY = '學習單專案';        // 專案統一放在這個資料夾
 let sbToken = null, sbEmail = null;
+let curCloudName = '', curCloudFolder = '';   // 目前開啟中的雲端專案，存檔時預設回同一個位置
 
 /* Supabase 的檔名只接受英數，中文名稱轉成安全檔名（顯示時再轉回中文） */
 /* 與雲端硬碟共用的編碼規則：非英數的名稱轉 n_<hex>，副檔名保留 */
@@ -959,6 +960,7 @@ async function cmRender() {
             const txt = await cloudDownload(r.name, cmFolder === null ? '' : cmFolder);
             const d = JSON.parse(txt);
             applySnapshot({ settings: d.settings, tocTitles: d.tocTitles, images: (d.images || []).map(dataUrlToBlob) });
+            curCloudName = r.name; curCloudFolder = cmFolder === null ? '' : cmFolder;
             $('cloudMgr').hidden = true;
             cloudMsg(`☁️ 已開啟「${r.name}」（${(d.images || []).length} 頁）`);
           } catch (e) { alert('開啟失敗：' + e.message); }
@@ -1111,12 +1113,17 @@ $('btnCloudLogin').addEventListener('click', async () => {
 $('btnCloudSave').addEventListener('click', async () => {
   if (!sbToken) return cloudMsg('請先按「🔑 登入」');
   if (!pages.querySelector('.sheet:not(.toc)')) return cloudMsg('請先加入圖片');
-  const suggest = ($('cloudSel').value.split('|').pop()) || $('projSel').value || ('學習單 ' + new Date().toISOString().slice(0, 10));
-  const name = prompt('雲端專案名稱（同名會覆蓋）：', suggest);
+  const selRaw = $('cloudSel').value;
+  const selName = selRaw ? selRaw.split('|').pop() : '';
+  const selFolder = selRaw && selRaw.includes('|') ? selRaw.split('|')[0] : '';
+  const suggest = curCloudName || selName || $('projSel').value || ('學習單 ' + new Date().toISOString().slice(0, 10));
+  const where = curCloudName ? `\n（目前開啟的是${curCloudFolder ? '「' + curCloudFolder + '」資料夾裡的' : ''}「${curCloudName}」，直接按確定就會覆蓋它）` : '';
+  const name = prompt('雲端專案名稱（同名會覆蓋）：' + where, suggest);
   if (!name) return;
-  // 直接在這裡選／輸入資料夾，不用先到側欄設定
+  // 資料夾預設帶入目前開啟的位置，避免存錯地方變成副本
   const known = cloudCache.folders.length ? '\n現有資料夾：' + cloudCache.folders.join('、') : '';
-  const folderIn = prompt('要存到哪個資料夾？（留空＝放在最外層；輸入新名稱會自動建立）' + known, $('cloudFolder').value || '');
+  const defFolder = curCloudName ? curCloudFolder : (selFolder || $('cloudFolder').value || '');
+  const folderIn = prompt('要存到哪個資料夾？（留空＝放在最外層；輸入新名稱會自動建立）' + known, defFolder);
   if (folderIn === null) return;
   const chosenFolder = folderIn.trim();
   if (chosenFolder && !cloudCache.folders.includes(chosenFolder)) {
@@ -1134,9 +1141,10 @@ $('btnCloudSave').addEventListener('click', async () => {
     let pdfMB = null;
     try { pdfMB = await cloudUploadPdf(name, folder); } catch (e) { /* PDF 失敗不影響專案存檔 */ }
     if (folder && !cloudCache.folders.includes(folder)) cloudCache.folders.push(folder);
+    curCloudName = name; curCloudFolder = folder;
     await refreshCloudList(name);
     btn.textContent = '✅ 已存雲端';
-    cloudMsg(`☁️ 已存到雲端${folder ? '資料夾「' + folder + '」' : ''}：「${name}」` +
+    cloudMsg(`☁️ 已存到${folder ? '資料夾「' + folder + '」裡的' : '最外層的'}「${name}」` +
       `（專案檔 ${Math.round(payload.length / 1048576 * 10) / 10} MB` +
       (pdfMB ? `＋PDF ${pdfMB} MB` : '') + '）— 雲端硬碟裡可直接開 PDF 看或列印');
   } catch (e) {
@@ -1159,6 +1167,7 @@ $('btnCloudOpen').addEventListener('click', async () => {
     const txt = await cloudDownload(name, folder);
     const d = JSON.parse(txt);
     applySnapshot({ settings: d.settings, tocTitles: d.tocTitles, images: (d.images || []).map(dataUrlToBlob) });
+    curCloudName = name; curCloudFolder = folder;
     btn.textContent = '✅ 已開啟';
     cloudMsg(`☁️ 已從雲端開啟「${name}」（${(d.images || []).length} 頁）`);
   } catch (e) {
@@ -1458,6 +1467,7 @@ $('edok').addEventListener('click', () => {
   const g = out.getContext('2d');
   g.drawImage(baseC, 0, 0);
   edObjects.forEach(o => g.drawImage(o.canvas, o.x, o.y, o.w, o.h));
+  // 存成 JPEG：畫質幾乎無差，但檔案小 5～10 倍，存取都更快
   out.toBlob(b => {
     if (b && edSheet) {
       const img = edSheet.querySelector('img');
@@ -1465,9 +1475,10 @@ $('edok').addEventListener('click', () => {
       edSheet._blob = b;
       img.src = URL.createObjectURL(b);
       scheduleSave();
+      setSaveInfo(`✏️ 修圖已套用（${Math.round(b.size / 1048576 * 10) / 10} MB）— 記得按「☁️⬆ 存到雲端」保存`);
     }
     $('editor').hidden = true; edSheet = null; edObjects = []; edSel = -1;
-  }, 'image/png');
+  }, 'image/jpeg', 0.92);
 });
 
 /* 目錄標題輸入 */
