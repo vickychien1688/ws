@@ -301,8 +301,10 @@
 
   <span style="border-left:2px solid #46617c;padding-left:12px;display:flex;gap:8px;align-items:center">
     <label>☁️ 雲端
-      <select id="cloudSel" style="max-width:200px"><option value="">（未登入）</option></select>
+      <select id="cloudFolder" style="max-width:150px" title="資料夾"><option value="">（全部）</option></select>
     </label>
+    <button id="btnFolderNew" style="background:#7f8c8d;color:#fff" title="新增資料夾">📁＋</button>
+    <select id="cloudSel" style="max-width:190px"><option value="">（未登入）</option></select>
     <button id="btnCloudSave" style="background:#2c81ba;color:#fff" title="把目前內容存到雲端">☁️⬆ 存到雲端</button>
     <button id="btnCloudOpen" style="background:#2c81ba;color:#fff" title="從雲端開啟">☁️⬇ 雲端開啟</button>
     <button id="btnCloudLogin" style="background:#555;color:#fff">🔑 登入</button>
@@ -615,15 +617,26 @@ const SB_BUCKET = 'ws-projects';
 let sbToken = null, sbEmail = null;
 
 /* Supabase 的檔名只接受英數，中文名稱轉成安全檔名（顯示時再轉回中文） */
-function nameToKey(name) {
-  const hex = Array.from(new TextEncoder().encode(name)).map(b => b.toString(16).padStart(2, '0')).join('');
-  return 'p_' + hex + '.json';
+function enc(s) {
+  return Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function dec(hex) {
+  try { return new TextDecoder().decode(new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16)))); }
+  catch (e) { return hex; }
+}
+/* 路徑：f_<資料夾>/p_<專案>.json；沒有資料夾就直接放根目錄 */
+function nameToKey(name, folder) {
+  const file = 'p_' + enc(name) + '.json';
+  return folder ? 'f_' + enc(folder) + '/' + file : file;
 }
 function keyToName(key) {
   const m = /^p_([0-9a-f]+)\.json$/i.exec(key);
-  if (!m) return key.replace(/\.json$/, '');
-  const bytes = new Uint8Array(m[1].match(/../g).map(h => parseInt(h, 16)));
-  try { return new TextDecoder().decode(bytes); } catch (e) { return key; }
+  return m ? dec(m[1]) : key.replace(/\.json$/, '');
+}
+function folderToKey(folder) { return 'f_' + enc(folder); }
+function keyToFolder(key) {
+  const m = /^f_([0-9a-f]+)$/i.exec(key);
+  return m ? dec(m[1]) : key;
 }
 
 function cloudMsg(m) { setSaveInfo(m); }
@@ -666,32 +679,73 @@ async function cloudRefresh() {
   return true;
 }
 
-async function cloudList() {
+async function cloudRawList(prefix) {
   const res = await fetch(SB_URL + '/storage/v1/object/list/' + SB_BUCKET, {
     method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ prefix: '', limit: 100, sortBy: { column: 'updated_at', order: 'desc' } }),
+    body: JSON.stringify({ prefix: prefix || '', limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
   });
-  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudList(); throw new Error('請重新登入'); }
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudRawList(prefix); throw new Error('請重新登入'); }
   const d = await res.json();
   if (!Array.isArray(d)) throw new Error((d && d.message) || '讀取失敗');
-  return d.filter(f => f.name && f.name.endsWith('.json')).map(f => keyToName(f.name));
+  return d;
+}
+/* 回傳 { folders: [中文資料夾名], items: [{name, folder}] } */
+async function cloudList() {
+  const root = await cloudRawList('');
+  const folders = root.filter(f => f.id === null && /^f_[0-9a-f]+$/i.test(f.name)).map(f => keyToFolder(f.name));
+  const items = root.filter(f => f.name && f.name.endsWith('.json')).map(f => ({ name: keyToName(f.name), folder: '' }));
+  for (const fo of folders) {
+    const sub = await cloudRawList(folderToKey(fo) + '/');
+    sub.filter(f => f.name && f.name.endsWith('.json'))
+       .forEach(f => items.push({ name: keyToName(f.name), folder: fo }));
+  }
+  return { folders, items };
+}
+
+let cloudCache = { folders: [], items: [] };
+const esc = s => String(s).replace(/"/g, '&quot;');
+
+function renderCloudSelects(selected) {
+  const fsel = $('cloudFolder'), sel = $('cloudSel');
+  const cur = fsel.value;
+  fsel.innerHTML = '<option value="">（全部）</option>' +
+    cloudCache.folders.map(f => `<option value="${esc(f)}">📁 ${f}</option>`).join('');
+  if (cloudCache.folders.includes(cur)) fsel.value = cur;
+  const list = cloudCache.items.filter(it => !fsel.value || it.folder === fsel.value);
+  sel.innerHTML = '<option value="">（選擇雲端專案）</option>' +
+    list.map(it => `<option value="${esc(it.folder)}|${esc(it.name)}">${it.folder ? '📁' + it.folder + ' / ' : ''}${it.name}</option>`).join('');
+  if (selected) {
+    const hit = [...sel.options].find(o => o.value.endsWith('|' + selected));
+    if (hit) sel.value = hit.value;
+  }
 }
 
 async function refreshCloudList(selected) {
   const sel = $('cloudSel');
-  if (!sbToken) { sel.innerHTML = '<option value="">（未登入）</option>'; return; }
+  if (!sbToken) { sel.innerHTML = '<option value="">（未登入）</option>'; $('cloudFolder').innerHTML = '<option value="">（全部）</option>'; return; }
   try {
-    const names = await cloudList();
-    sel.innerHTML = '<option value="">（選擇雲端專案）</option>' +
-      names.map(n => `<option value="${n.replace(/"/g, '&quot;')}">${n}</option>`).join('');
-    if (selected && names.includes(selected)) sel.value = selected;
+    cloudCache = await cloudList();
+    renderCloudSelects(selected);
   } catch (e) { sel.innerHTML = '<option value="">（讀取失敗）</option>'; }
 }
 
-async function cloudUpload(name, payloadText) {
-  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name);
+$('cloudFolder').addEventListener('change', () => renderCloudSelects());
+
+$('btnFolderNew').addEventListener('click', () => {
+  if (!sbToken) return cloudMsg('請先按「🔑 登入」');
+  const name = prompt('新資料夾名稱（例如：2026 暑期、EOW 教材）：');
+  if (!name) return;
+  if (!cloudCache.folders.includes(name)) cloudCache.folders.push(name);
+  renderCloudSelects();
+  $('cloudFolder').value = name;
+  renderCloudSelects();
+  cloudMsg(`📁 已建立資料夾「${name}」— 按「☁️⬆ 存到雲端」時會存進這個資料夾`);
+});
+
+async function cloudUpload(name, payloadText, folder) {
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name, folder);
   let res = await fetch(url, { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json', 'x-upsert': 'true' }), body: payloadText });
-  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudUpload(name, payloadText); }
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudUpload(name, payloadText, folder); }
   if (!res.ok) {
     const t = await res.text();
     let msg = t.slice(0, 150);
@@ -702,10 +756,10 @@ async function cloudUpload(name, payloadText) {
   }
 }
 
-async function cloudDownload(name) {
-  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name);
+async function cloudDownload(name, folder) {
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + nameToKey(name, folder);
   let res = await fetch(url, { headers: sbHeaders() });
-  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudDownload(name); }
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudDownload(name, folder); }
   if (!res.ok) throw new Error('下載失敗');
   return await res.text();
 }
@@ -747,18 +801,20 @@ $('btnCloudLogin').addEventListener('click', async () => {
 $('btnCloudSave').addEventListener('click', async () => {
   if (!sbToken) return cloudMsg('請先按「🔑 登入」');
   if (!pages.querySelector('.sheet:not(.toc)')) return cloudMsg('請先加入圖片');
-  const suggest = $('cloudSel').value || $('projSel').value || ('學習單 ' + new Date().toISOString().slice(0, 10));
+  const suggest = ($('cloudSel').value.split('|').pop()) || $('projSel').value || ('學習單 ' + new Date().toISOString().slice(0, 10));
   const name = prompt('雲端專案名稱（同名會覆蓋）：', suggest);
   if (!name) return;
   const btn = $('btnCloudSave');
   btn.disabled = true;
   try {
+    const folder = $('cloudFolder').value;
     const payload = await buildPayload();
     btn.textContent = '上傳中…';
-    await cloudUpload(name, payload);
+    await cloudUpload(name, payload, folder);
+    if (folder && !cloudCache.folders.includes(folder)) cloudCache.folders.push(folder);
     await refreshCloudList(name);
     btn.textContent = '✅ 已存雲端';
-    cloudMsg(`☁️ 已存到雲端：「${name}」（${Math.round(payload.length / 1048576 * 10) / 10} MB）— 任何裝置登入都看得到`);
+    cloudMsg(`☁️ 已存到雲端${folder ? '資料夾「' + folder + '」' : ''}：「${name}」（${Math.round(payload.length / 1048576 * 10) / 10} MB）— 任何裝置登入都看得到`);
   } catch (e) {
     btn.textContent = '存雲端失敗';
     cloudMsg('存到雲端失敗：' + e.message);
@@ -768,12 +824,15 @@ $('btnCloudSave').addEventListener('click', async () => {
 
 $('btnCloudOpen').addEventListener('click', async () => {
   if (!sbToken) return cloudMsg('請先按「🔑 登入」');
-  const name = $('cloudSel').value;
-  if (!name) return cloudMsg('請先在「☁️ 雲端」選單選一個專案');
+  const raw = $('cloudSel').value;
+  if (!raw) return cloudMsg('請先在「☁️ 雲端」選單選一個專案');
+  const sep = raw.indexOf('|');
+  const folder = sep >= 0 ? raw.slice(0, sep) : '';
+  const name = sep >= 0 ? raw.slice(sep + 1) : raw;
   const btn = $('btnCloudOpen');
   btn.disabled = true; btn.textContent = '下載中…';
   try {
-    const txt = await cloudDownload(name);
+    const txt = await cloudDownload(name, folder);
     const d = JSON.parse(txt);
     applySnapshot({ settings: d.settings, tocTitles: d.tocTitles, images: (d.images || []).map(dataUrlToBlob) });
     btn.textContent = '✅ 已開啟';
