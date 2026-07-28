@@ -1192,7 +1192,7 @@ $('btnCloudOpen').addEventListener('click', async () => {
 /* ===== 搬家：匯出 / 匯入（跨網站、跨電腦都可用） =====
    匯出成 .json 檔（圖片以 base64 存放）；超過大小上限會自動拆成多個檔案。
    線上沙盒環境（artifact）走 window.claude.downloads，一般網站直接下載。 */
-const EXPORT_CHUNK_BYTES = 12 * 1024 * 1024;  // 每個檔案上限（平台限制 16MiB）
+const EXPORT_CHUNK_BYTES = 14 * 1024 * 1024;  // 每個檔案上限（平台限制 16MiB）
 
 function blobToDataUrl(b) {
   return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
@@ -1204,7 +1204,7 @@ function blobToCompressedDataUrl(b) {
       const url = URL.createObjectURL(b);
       const im = new Image();
       im.onload = () => {
-        const maxW = 2200;
+        const maxW = 2600;
         const k = Math.min(1, maxW / im.naturalWidth);
         const c = document.createElement('canvas');
         c.width = Math.round(im.naturalWidth * k);
@@ -1213,7 +1213,7 @@ function blobToCompressedDataUrl(b) {
         g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
         g.drawImage(im, 0, 0, c.width, c.height);
         URL.revokeObjectURL(url);
-        res(c.toDataURL('image/jpeg', 0.75));
+        res(c.toDataURL('image/jpeg', 0.9));
       };
       im.onerror = async () => { URL.revokeObjectURL(url); res(await blobToDataUrl(b)); };
       im.src = url;
@@ -1324,7 +1324,7 @@ $('importFile').addEventListener('change', async e => {
 });
 
 function edPushUndo() {
-  edUndo.push(baseC.toDataURL('image/jpeg', 0.9));
+  edUndo.push(baseC.toDataURL('image/jpeg', 0.95));
   if (edUndo.length > 15) edUndo.shift();
 }
 
@@ -1478,7 +1478,7 @@ $('edok').addEventListener('click', () => {
       setSaveInfo(`✏️ 修圖已套用（${Math.round(b.size / 1048576 * 10) / 10} MB）— 記得按「☁️⬆ 存到雲端」保存`);
     }
     $('editor').hidden = true; edSheet = null; edObjects = []; edSel = -1;
-  }, 'image/jpeg', 0.92);
+  }, 'image/jpeg', 0.97);
 });
 
 /* 目錄標題輸入 */
@@ -2075,7 +2075,7 @@ function renderSheetToJpeg(sheet, i, num, o, W, H) {
   g.restore();
 
   drawFooterAndPn(g, o, i, num, W, H);
-  return c.toDataURL('image/jpeg', 0.85);
+  return c.toDataURL('image/jpeg', 0.94);
 }
 
 function renderTocToJpeg(i, contentCount, o, W, H) {
@@ -2124,7 +2124,7 @@ function renderTocToJpeg(i, contentCount, o, W, H) {
   }
 
   drawFooterAndPn(g, o, i, null, W, H);
-  return c.toDataURL('image/jpeg', 0.85);
+  return c.toDataURL('image/jpeg', 0.94);
 }
 
 function dataUrlToBytes(u) {
