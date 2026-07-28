@@ -373,7 +373,10 @@
       </div>
       <div class="row2">
         <label>字級 <input type="number" id="ftSize" value="10" step="1" min="6"> pt</label>
-        <label title="離邊緣的距離，數字越大越往內">邊距 <input type="number" id="ftGap" value="0.15" step="0.05" min="0"> cm</label>
+        <label title="離上／下邊緣的距離，數字越大越往內">上下 <input type="number" id="ftGap" value="0.15" step="0.05" min="0"> cm</label>
+      </div>
+      <div class="row2">
+        <label title="靠左時＝往右移；靠右時＝往左移；置中時＝正值往右、負值往左">左右 <input type="number" id="ftGapX" value="0.8" step="0.1"> cm</label>
       </div>
     </div>
   </details>
@@ -1473,6 +1476,7 @@ function getOpts() {
     ftWeight: $('ftWeight').value,
     ftSize: parseFloat($('ftSize').value) || 10,
     ftGap: (() => { const v = parseFloat($('ftGap').value); return isNaN(v) ? 0.15 : v; })(),
+    ftGapX: (() => { const v = parseFloat($('ftGapX').value); return isNaN(v) ? 0.8 : v; })(),
   };
 }
 
@@ -1599,13 +1603,14 @@ function refresh() {
       ft.style.top = pos.v === 'top' ? o.ftGap + 'cm' : 'auto';
       ft.style.bottom = pos.v === 'bottom' ? o.ftGap + 'cm' : 'auto';
       if (pos.h === 'center') {
-        ft.style.left = '50%'; ft.style.right = 'auto'; ft.style.transform = 'translateX(-50%)';
+        ft.style.left = '50%'; ft.style.right = 'auto';
+        ft.style.transform = `translateX(calc(-50% + ${o.ftGapX}cm))`;
       } else {
         ft.style.transform = '';
         if (pos.h === 'left') {
-          ft.style.left = (mirrored ? 0.8 : o.bind + 0.8) + 'cm'; ft.style.right = 'auto';
+          ft.style.left = ((mirrored ? 0 : o.bind) + o.ftGapX) + 'cm'; ft.style.right = 'auto';
         } else {
-          ft.style.right = (mirrored ? o.bind + 0.8 : 0.8) + 'cm'; ft.style.left = 'auto';
+          ft.style.right = ((mirrored ? o.bind : 0) + o.ftGapX) + 'cm'; ft.style.left = 'auto';
         }
       }
     }
@@ -1643,7 +1648,7 @@ $('zoomSlider').addEventListener('input', () => {   // 拉滑桿＝切到自訂�
   refresh();
 });
 
-const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap'];
+const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap','ftGapX'];
 SETTING_IDS.forEach(id => $(id).addEventListener('input', refresh));
 refresh();
 
@@ -1875,6 +1880,9 @@ function drawFooterAndPn(g, o, i, num, W, H) {
   const side = resolvePnSide(o, i);
   const padL = cm2px(mirrored ? 0.8 : o.bind + 0.8);
   const padR = cm2px(mirrored ? o.bind + 0.8 : 0.8);
+  // 頁尾文字專用的左右位置（可自訂）
+  const ftL = cm2px((mirrored ? 0 : o.bind) + o.ftGapX);
+  const ftR = cm2px((mirrored ? o.bind : 0) + o.ftGapX);
 
   if (num !== null) {
     const pnPx = pt2px(o.pnPt), r = pnPx * 1.9 / 2;
@@ -1889,9 +1897,9 @@ function drawFooterAndPn(g, o, i, num, W, H) {
     g.font = o.ftWeight + ' ' + fPx + 'px ' + FT_FONTS[o.ftFont];
     g.textBaseline = pos.v === 'top' ? 'top' : 'bottom';
     const y = pos.v === 'top' ? cm2px(o.ftGap) : H - cm2px(o.ftGap);
-    if (pos.h === 'center') { g.textAlign = 'center'; g.fillText(o.footer, W / 2, y); }
-    else if (pos.h === 'left') { g.textAlign = 'left'; g.fillText(o.footer, padL, y); }
-    else { g.textAlign = 'right'; g.fillText(o.footer, W - padR, y); }
+    if (pos.h === 'center') { g.textAlign = 'center'; g.fillText(o.footer, W / 2 + cm2px(o.ftGapX), y); }
+    else if (pos.h === 'left') { g.textAlign = 'left'; g.fillText(o.footer, ftL, y); }
+    else { g.textAlign = 'right'; g.fillText(o.footer, W - ftR, y); }
   }
 }
 
