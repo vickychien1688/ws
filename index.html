@@ -561,6 +561,29 @@ const EXPORT_CHUNK_BYTES = 7 * 1024 * 1024;   // 每個檔案上限，保守值
 function blobToDataUrl(b) {
   return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
 }
+/* 匯出前壓縮：轉成 JPEG、最長邊 2400px（仍達 300dpi 列印品質），大幅縮小搬家檔 */
+function blobToCompressedDataUrl(b) {
+  return new Promise(async res => {
+    try {
+      const url = URL.createObjectURL(b);
+      const im = new Image();
+      im.onload = () => {
+        const maxW = 2400;
+        const k = Math.min(1, maxW / im.naturalWidth);
+        const c = document.createElement('canvas');
+        c.width = Math.round(im.naturalWidth * k);
+        c.height = Math.round(im.naturalHeight * k);
+        const g = c.getContext('2d');
+        g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+        g.drawImage(im, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        res(c.toDataURL('image/jpeg', 0.82));
+      };
+      im.onerror = async () => { URL.revokeObjectURL(url); res(await blobToDataUrl(b)); };
+      im.src = url;
+    } catch (e) { res(await blobToDataUrl(b)); }
+  });
+}
 function dataUrlToBlob(u) {
   const [head, b64] = u.split(',');
   const mime = (head.match(/:(.*?);/) || [null, 'image/png'])[1];
@@ -600,7 +623,7 @@ $('btnExport').addEventListener('click', async () => {
     let cur = [], curSize = 0;
     for (let i = 0; i < sheets.length; i++) {
       btn.textContent = `打包第 ${i + 1}/${sheets.length} 頁…`;
-      const url = await blobToDataUrl(sheets[i]._blob);
+      const url = await blobToCompressedDataUrl(sheets[i]._blob);
       if (curSize + url.length > EXPORT_CHUNK_BYTES && cur.length) { parts.push(cur); cur = []; curSize = 0; }
       cur.push(url); curSize += url.length;
     }
