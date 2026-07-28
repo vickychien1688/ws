@@ -1519,6 +1519,18 @@ function setExtras(arr, rerenderUI) {
   if (rerenderUI !== false) renderExtraUI();
   refresh();
 }
+/* 「第幾張」判斷：留空＝全部；支援 3 / 1,4 / 2-5 混合 */
+function xtOnPage(spec, pageNo) {
+  const s = (spec || '').trim();
+  if (!s) return true;
+  return s.split(',').some(part => {
+    const t = part.trim();
+    if (!t) return false;
+    const m = /^(\d+)\s*-\s*(\d+)$/.exec(t);
+    if (m) { const a = +m[1], b = +m[2]; return pageNo >= Math.min(a, b) && pageNo <= Math.max(a, b); }
+    return +t === pageNo;
+  });
+}
 const XT_POS = [['bottom-right','右下'],['bottom-left','左下'],['bottom-center','下方置中'],
                 ['top-right','右上'],['top-left','左上'],['top-center','上方置中']];
 
@@ -1546,7 +1558,9 @@ function renderExtraUI() {
       <div class="row2">
         <label>上下 <input type="number" data-k="gap" step="0.05" min="0" style="width:60px"> cm</label>
         <label>左右 <input type="number" data-k="gapX" step="0.1" style="width:60px"> cm</label>
-      </div>`;
+      </div>
+      <label title="留空＝每一頁都有；也可填 3 或 1,4 或 2-5">第幾張
+        <input type="text" data-k="pages" placeholder="留空＝全部；例如 3 或 1,4,7-9"></label>`;
     card.querySelectorAll('[data-k]').forEach(el => {
       const k = el.dataset.k;
       el.value = it[k];
@@ -1565,7 +1579,7 @@ function renderExtraUI() {
 
 $('btnAddText').addEventListener('click', () => {
   const cur = getExtras();
-  cur.push({ text: '', pos: 'bottom-right', font: 'sans', weight: '400', size: 10, gap: 0.5, gapX: 1.0 });
+  cur.push({ text: '', pos: 'bottom-right', font: 'sans', weight: '400', size: 10, gap: 0.5, gapX: 1.0, pages: '' });
   setExtras(cur);
 });
 
@@ -1675,7 +1689,7 @@ function refresh() {
     // 額外文字方塊
     s.querySelectorAll('.xtext').forEach(x => x.remove());
     getExtras().forEach(it => {
-      if (!it.text) return;
+      if (!it.text || !xtOnPage(it.pages, i + 1)) return;
       const el = document.createElement('div');
       el.className = 'xtext';
       el.textContent = it.text;
@@ -1999,7 +2013,7 @@ function drawFooterAndPn(g, o, i, num, W, H) {
   }
   // 額外文字方塊
   getExtras().forEach(it => {
-    if (!it.text) return;
+    if (!it.text || !xtOnPage(it.pages, i + 1)) return;
     const [v, hh] = (it.pos || 'bottom-right').split('-');
     const fPx = pt2px(it.size || 10);
     g.fillStyle = '#000';
