@@ -556,7 +556,7 @@ $('eddelete').addEventListener('click', () => {
 /* ===== 搬家：匯出 / 匯入（跨網站、跨電腦都可用） =====
    匯出成 .json 檔（圖片以 base64 存放）；超過大小上限會自動拆成多個檔案。
    線上沙盒環境（artifact）走 window.claude.downloads，一般網站直接下載。 */
-const EXPORT_CHUNK_BYTES = 7 * 1024 * 1024;   // 每個檔案上限，保守值
+const EXPORT_CHUNK_BYTES = 12 * 1024 * 1024;  // 每個檔案上限（平台限制 16MiB）
 
 function blobToDataUrl(b) {
   return new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(b); });
@@ -568,7 +568,7 @@ function blobToCompressedDataUrl(b) {
       const url = URL.createObjectURL(b);
       const im = new Image();
       im.onload = () => {
-        const maxW = 2400;
+        const maxW = 2200;
         const k = Math.min(1, maxW / im.naturalWidth);
         const c = document.createElement('canvas');
         c.width = Math.round(im.naturalWidth * k);
@@ -577,7 +577,7 @@ function blobToCompressedDataUrl(b) {
         g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
         g.drawImage(im, 0, 0, c.width, c.height);
         URL.revokeObjectURL(url);
-        res(c.toDataURL('image/jpeg', 0.82));
+        res(c.toDataURL('image/jpeg', 0.75));
       };
       im.onerror = async () => { URL.revokeObjectURL(url); res(await blobToDataUrl(b)); };
       im.src = url;
