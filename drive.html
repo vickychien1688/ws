@@ -356,27 +356,57 @@ async function render() {
 }
 
 /* ===== 預覽 ===== */
+let prevBlobUrl = null;
+const MIME = { pdf:'application/pdf', jpg:'image/jpeg', jpeg:'image/jpeg', png:'image/png', gif:'image/gif',
+  webp:'image/webp', bmp:'image/bmp', svg:'image/svg+xml', mp4:'video/mp4', webm:'video/webm', mov:'video/quicktime',
+  mp3:'audio/mpeg', wav:'audio/wav', m4a:'audio/mp4', txt:'text/plain' };
+
 async function preview(key, name) {
   const e = (name.split('.').pop() || '').toLowerCase();
-  const canImg = ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(e);
-  const canPdf = e === 'pdf';
-  if (!canImg && !canPdf) {
+  const isImg = ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(e);
+  const isPdf = e === 'pdf';
+  const isVid = ['mp4','webm','mov'].includes(e);
+  const isAud = ['mp3','wav','m4a'].includes(e);
+  const isTxt = ['txt','md','csv','json'].includes(e);
+  if (!isImg && !isPdf && !isVid && !isAud && !isTxt) {
     try {
       const url = await signedUrl(key);
       const a = document.createElement('a'); a.href = url; a.download = name;
       document.body.appendChild(a); a.click(); a.remove();
+      msg('這種格式無法線上預覽，已開始下載');
     } catch (err) { msg('開啟失敗：' + err.message); }
     return;
   }
+  $('prevName').textContent = name + '（載入中…）';
+  $('prevBody').innerHTML = '<div style="color:#fff;font-size:16px">讀取中，請稍候…</div>';
+  $('prev').classList.add('show');
   try {
     const url = await signedUrl(key);
+    // 先抓成 blob，才能在頁面裡直接顯示（Supabase 的連結預設會觸發下載）
+    const buf = await fetch(url).then(r => r.arrayBuffer());
+    if (prevBlobUrl) URL.revokeObjectURL(prevBlobUrl);
+    prevBlobUrl = URL.createObjectURL(new Blob([buf], { type: MIME[e] || 'application/octet-stream' }));
     $('prevName').textContent = name;
-    $('prevBody').innerHTML = canImg ? `<img src="${url}">` : `<iframe src="${url}"></iframe>`;
-    $('prevDownload').onclick = () => { const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); };
-    $('prev').classList.add('show');
-  } catch (err) { msg('預覽失敗：' + err.message); }
+    if (isImg) $('prevBody').innerHTML = `<img src="${prevBlobUrl}">`;
+    else if (isPdf) $('prevBody').innerHTML = `<iframe src="${prevBlobUrl}#view=FitH"></iframe>`;
+    else if (isVid) $('prevBody').innerHTML = `<video src="${prevBlobUrl}" controls style="max-width:100%;max-height:100%"></video>`;
+    else if (isAud) $('prevBody').innerHTML = `<audio src="${prevBlobUrl}" controls style="width:80%"></audio>`;
+    else {
+      const text = new TextDecoder().decode(buf).slice(0, 20000);
+      $('prevBody').innerHTML = `<pre style="color:#fff;background:#1c2733;padding:18px;border-radius:8px;max-width:100%;white-space:pre-wrap;word-break:break-all">${text.replace(/</g,'&lt;')}</pre>`;
+    }
+    $('prevDownload').onclick = () => {
+      const a = document.createElement('a'); a.href = prevBlobUrl; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+    };
+  } catch (err) {
+    $('prevBody').innerHTML = `<div style="color:#fff">預覽失敗：${err.message}</div>`;
+  }
 }
-$('prevClose').onclick = () => { $('prev').classList.remove('show'); $('prevBody').innerHTML = ''; };
+$('prevClose').onclick = () => {
+  $('prev').classList.remove('show'); $('prevBody').innerHTML = '';
+  if (prevBlobUrl) { URL.revokeObjectURL(prevBlobUrl); prevBlobUrl = null; }
+};
 
 /* ===== 上傳 ===== */
 async function doUpload(files) {
