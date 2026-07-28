@@ -13,21 +13,54 @@
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: "PingFang TC", "Microsoft JhengHei", sans-serif; background: #e8e8ee; }
 
-  /* ===== 控制面板（列印時隱藏） ===== */
-  #panel {
-    position: sticky; top: 0; z-index: 10;
-    background: #2c3e50; color: #fff;
-    padding: 12px 18px;
-    display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  /* ===== 版面：左側設定欄 + 主畫面 ===== */
+  #topbar {
+    position: sticky; top: 0; z-index: 30;
+    background: #2c3e50; color: #fff; padding: 10px 16px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     box-shadow: 0 2px 8px rgba(0,0,0,.3);
   }
-  #panel label { display: flex; align-items: center; gap: 5px; font-size: 14px; }
-  #panel input[type=number] { width: 62px; padding: 4px; border: none; border-radius: 4px; }
-  #panel input[type=text] { width: 180px; padding: 4px; border: none; border-radius: 4px; }
-  #panel select { padding: 4px; border: none; border-radius: 4px; }
+  #topbar button, #topbar label.tb {
+    padding: 8px 15px; border: none; border-radius: 7px; cursor: pointer;
+    font-size: 14px; font-weight: bold; background: #46617c; color: #fff;
+  }
+  #topbar .sp { flex: 1; }
+  #btnMenu { background: #34495e !important; font-size: 17px !important; padding: 8px 13px !important; }
+
+  #layout { display: flex; align-items: flex-start; }
+  #panel {
+    width: 300px; flex: none; align-self: stretch;
+    background: #2c3e50; color: #fff;
+    padding: 14px 16px 40px;
+    display: flex; flex-direction: column; gap: 10px;
+    position: sticky; top: 52px; max-height: calc(100vh - 52px); overflow-y: auto;
+    box-shadow: 2px 0 10px rgba(0,0,0,.25);
+  }
+  body.panel-hidden #panel { display: none; }
+  #main { flex: 1; min-width: 0; }
+
+  /* 設定分組（可收合） */
+  #panel details {
+    background: rgba(255,255,255,.06); border-radius: 8px; padding: 6px 10px;
+  }
+  #panel details[open] { background: rgba(255,255,255,.1); }
+  #panel summary {
+    cursor: pointer; font-weight: bold; font-size: 14px; padding: 5px 2px;
+    list-style: none; user-select: none;
+  }
+  #panel summary::-webkit-details-marker { display: none; }
+  #panel summary::before { content: '▸ '; }
+  #panel details[open] summary::before { content: '▾ '; }
+  #panel .grp { display: flex; flex-direction: column; gap: 8px; padding: 8px 2px 4px; }
+  #panel .row2 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #panel label { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
+  #panel input[type=number] { width: 66px; padding: 5px; border: none; border-radius: 5px; }
+  #panel input[type=text] { flex: 1; min-width: 0; padding: 5px; border: none; border-radius: 5px; }
+  #panel select { flex: 1; min-width: 0; padding: 5px; border: none; border-radius: 5px; }
+  #panel input[type=range] { flex: 1; min-width: 0; }
   #panel button {
-    padding: 7px 16px; border: none; border-radius: 6px; cursor: pointer;
-    font-size: 14px; font-weight: bold;
+    padding: 7px 13px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 13.5px; font-weight: bold;
   }
   #panel button:disabled { opacity: .6; cursor: wait; }
   #btnAdd { background: #27ae60; color: #fff; }
@@ -214,7 +247,8 @@
   @media print {
     @page { size: A4 portrait; margin: 0; }
     body { background: #fff; }
-    #panel, #hint, .toolbar, .bindline, #empty { display: none !important; }
+    #panel, #topbar, #hint, .toolbar, .bindline, #empty { display: none !important; }
+    #layout { display: block !important; }
     #pages { display: block !important; padding: 0; gap: 0; zoom: 1 !important; }
     .sheet {
       box-shadow: none; margin: 0;
@@ -227,144 +261,167 @@
 </head>
 <body class="fit-cover">
 
-<div id="panel">
-  <button id="btnAdd">＋ 加入圖片</button>
+<div id="topbar">
+  <button id="btnMenu" title="顯示／隱藏設定欄">☰</button>
+  <button id="btnAdd" style="background:#27ae60">＋ 加入圖片</button>
   <input type="file" id="fileInput" accept="image/*" multiple hidden>
-
-  <label title="一列要放幾張，方便拖曳搬移">版面
-    <select id="gridCols">
-      <option value="1" selected>單張</option>
-      <option value="2">一列 2 張</option>
-      <option value="3">一列 3 張</option>
-      <option value="4">一列 4 張</option>
-    </select>
-  </label>
-  <label>檢視大小
-    <select id="viewZoom">
-      <option value="fit" selected>一頁全覽</option>
-      <option value="custom">自訂 ↓</option>
-      <option value="0.5">50%</option>
-      <option value="0.75">75%</option>
-      <option value="1">100%</option>
-    </select>
-    <input type="range" id="zoomSlider" min="20" max="150" value="100" title="自由調整頁面比例">
-    <span id="zoomVal"></span>
-  </label>
-  <label>裝訂邊
-    <input type="number" id="bindCm" value="0.5" step="0.1" min="0"> cm
-  </label>
-  <label>上方留白
-    <input type="number" id="topCm" value="0" step="0.1" min="0"> cm
-  </label>
-  <label>下方留白
-    <input type="number" id="bottomCm" value="0.1" step="0.1" min="0"> cm
-  </label>
-  <label>圖片方式
-    <select id="fitMode">
-      <option value="cover" selected>等比填滿（不變形，可能裁邊）</option>
-      <option value="contain">等比完整（不變形，可能留白）</option>
-      <option value="fill">拉伸填滿（會變形）</option>
-    </select>
-  </label>
-  <label><input type="checkbox" id="showPn" checked> 頁碼</label>
-  <label>頁碼位置
-    <select id="pnPos">
-      <option value="center" selected>下方置中</option>
-      <option value="right">右下</option>
-      <option value="left">左下</option>
-      <option value="outer">外側（雙面用）</option>
-    </select>
-  </label>
-  <label title="第一頁不顯示頁碼，第二頁開始編為起始頁號">
-    <input type="checkbox" id="coverPage" checked> 第一頁是封面
-  </label>
-  <label title="在封面後自動加一頁目錄，標題可直接點擊輸入">
-    <input type="checkbox" id="tocOn"> 目錄頁
-  </label>
-  <label>起始頁
-    <input type="number" id="startPn" value="1" step="1">
-  </label>
-  <label>頁碼字級
-    <input type="number" id="pnSize" value="14" step="1" min="5"> pt
-  </label>
-  <label title="雙面列印裝訂用：偶數頁裝訂邊改到右側">
-    <input type="checkbox" id="mirror"> 雙面鏡射
-  </label>
-  <label>頁尾文字
-    <input type="text" id="footerText" placeholder="例：五年級英語 2026.7（可留空）">
-  </label>
-  <label>文字位置
-    <select id="ftPos">
-      <option value="auto" selected>自動（頁碼對面）</option>
-      <option value="bottom-left">左下</option>
-      <option value="bottom-center">下方置中</option>
-      <option value="bottom-right">右下</option>
-      <option value="top-left">左上</option>
-      <option value="top-center">上方置中</option>
-      <option value="top-right">右上</option>
-    </select>
-  </label>
-  <label>字型
-    <select id="ftFont">
-      <option value="sans" selected>黑體</option>
-      <option value="serif">明體</option>
-      <option value="kai">楷體</option>
-      <option value="round">圓體</option>
-    </select>
-  </label>
-  <label>粗細
-    <select id="ftWeight">
-      <option value="400" selected>標準</option>
-      <option value="700">粗體</option>
-      <option value="300">細體</option>
-    </select>
-  </label>
-  <label>字級
-    <input type="number" id="ftSize" value="10" step="1" min="6"> pt
-  </label>
-  <label title="文字離頁面上（或下）邊緣的距離，數字越大越往內縮">邊距
-    <input type="number" id="ftGap" value="0.15" step="0.05" min="0"> cm
-  </label>
-
-  <span style="border-left:2px solid #46617c;padding-left:12px;display:flex;gap:8px;align-items:center">
-    <label>📁 專案
-      <select id="projSel" style="max-width:200px"><option value="">（未開啟專案）</option></select>
-    </label>
-    <button id="btnProjSave" style="background:#8e44ad;color:#fff">💾 存成專案</button>
-    <button id="btnProjOpen" style="background:#16a085;color:#fff">📂 開啟</button>
-    <button id="btnProjDel" style="background:#c0392b;color:#fff">🗑 刪除</button>
-    <button id="btnExport" style="background:#d35400;color:#fff" title="把目前所有頁面與設定存成搬家檔">📤 匯出</button>
-    <button id="btnImport" style="background:#16a085;color:#fff" title="讀取搬家檔，把頁面與設定搬進來">📥 匯入</button>
-    <input type="file" id="importFile" accept=".json,application/json" multiple hidden>
-  </span>
-
-  <span style="border-left:2px solid #46617c;padding-left:12px;display:flex;gap:8px;align-items:center">
-    <label>☁️ 雲端
-      <select id="cloudFolder" style="max-width:150px" title="資料夾"><option value="">（全部）</option></select>
-    </label>
-    <button id="btnFolderNew" style="background:#7f8c8d;color:#fff" title="新增資料夾">📁＋</button>
-    <select id="cloudSel" style="max-width:190px"><option value="">（未登入）</option></select>
-    <button id="btnCloudSave" style="background:#2c81ba;color:#fff" title="把目前內容存到雲端">☁️⬆ 存到雲端</button>
-    <button id="btnCloudOpen" style="background:#2c81ba;color:#fff" title="從雲端開啟">☁️⬇ 雲端開啟</button>
-    <button id="btnCloudMgr" style="background:#34495e;color:#fff" title="像雲端硬碟一樣瀏覽、改名、搬移、刪除">🗂 雲端管理</button>
-    <button id="btnCloudLogin" style="background:#555;color:#fff">🔑 登入</button>
-  </span>
-
-  <button id="btnDownload">⬇ 下載 PDF</button>
-  <button id="btnPrint">🖨 列印</button>
-  <button id="btnClear">清空</button>
-  <a href="drive.html" style="margin-left:8px;padding:7px 14px;border-radius:6px;background:#1abc9c;color:#fff;text-decoration:none;font-size:14px;font-weight:bold">☁️ 我的雲端硬碟</a>
+  <button id="btnDownload" style="background:#2980b9">⬇ 下載 PDF</button>
+  <button id="btnPrint" style="background:#e67e22">🖨 列印</button>
+  <button id="btnCloudSave" style="background:#2c81ba">☁️⬆ 存到雲端</button>
+  <button id="btnCloudMgr" style="background:#34495e">🗂 雲端管理</button>
+  <a href="drive.html" style="text-decoration:none"><button style="background:#16a085">💾 我的雲端硬碟</button></a>
+  <span class="sp"></span>
+  <button id="btnClear" style="background:#7f8c8d">清空</button>
 </div>
 
+<div id="layout">
+<div id="panel">
+
+  <details open>
+    <summary>📄 版面與檢視</summary>
+    <div class="grp">
+      <label>版面
+        <select id="gridCols">
+          <option value="1" selected>單張</option>
+          <option value="2">一列 2 張</option>
+          <option value="3">一列 3 張</option>
+          <option value="4">一列 4 張</option>
+        </select>
+      </label>
+      <label>檢視
+        <select id="viewZoom">
+          <option value="fit" selected>一頁全覽</option>
+          <option value="custom">自訂 ↓</option>
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1">100%</option>
+        </select>
+      </label>
+      <div class="row2"><input type="range" id="zoomSlider" min="20" max="150" value="100"><span id="zoomVal"></span></div>
+      <label>圖片方式
+        <select id="fitMode">
+          <option value="cover" selected>等比填滿</option>
+          <option value="contain">等比完整</option>
+          <option value="fill">拉伸填滿</option>
+        </select>
+      </label>
+    </div>
+  </details>
+
+  <details>
+    <summary>📐 邊界</summary>
+    <div class="grp">
+      <label>裝訂邊 <input type="number" id="bindCm" value="0.5" step="0.1" min="0"> cm</label>
+      <label>上方留白 <input type="number" id="topCm" value="0" step="0.1" min="0"> cm</label>
+      <label>下方留白 <input type="number" id="bottomCm" value="0.1" step="0.1" min="0"> cm</label>
+      <label title="雙面列印裝訂用"><input type="checkbox" id="mirror"> 雙面鏡射</label>
+    </div>
+  </details>
+
+  <details>
+    <summary>🔢 頁碼與目錄</summary>
+    <div class="grp">
+      <label><input type="checkbox" id="showPn" checked> 顯示頁碼</label>
+      <label>位置
+        <select id="pnPos">
+          <option value="center" selected>下方置中</option>
+          <option value="right">右下</option>
+          <option value="left">左下</option>
+          <option value="outer">外側（雙面用）</option>
+        </select>
+      </label>
+      <label>起始頁 <input type="number" id="startPn" value="1" step="1"></label>
+      <label>字級 <input type="number" id="pnSize" value="14" step="1" min="5"> pt</label>
+      <label title="第一頁不顯示頁碼"><input type="checkbox" id="coverPage" checked> 第一頁是封面</label>
+      <label title="封面後自動加目錄"><input type="checkbox" id="tocOn"> 加目錄頁</label>
+    </div>
+  </details>
+
+  <details>
+    <summary>✏️ 頁首／頁尾文字</summary>
+    <div class="grp">
+      <input type="text" id="footerText" placeholder="例：五年級英語 2026.7">
+      <label>位置
+        <select id="ftPos">
+          <option value="auto" selected>自動（頁碼對面）</option>
+          <option value="bottom-left">左下</option>
+          <option value="bottom-center">下方置中</option>
+          <option value="bottom-right">右下</option>
+          <option value="top-left">左上</option>
+          <option value="top-center">上方置中</option>
+          <option value="top-right">右上</option>
+        </select>
+      </label>
+      <div class="row2">
+        <label>字型
+          <select id="ftFont">
+            <option value="sans" selected>黑體</option>
+            <option value="serif">明體</option>
+            <option value="kai">楷體</option>
+            <option value="round">圓體</option>
+          </select>
+        </label>
+      </div>
+      <div class="row2">
+        <label>粗細
+          <select id="ftWeight">
+            <option value="400" selected>標準</option>
+            <option value="700">粗體</option>
+            <option value="300">細體</option>
+          </select>
+        </label>
+      </div>
+      <div class="row2">
+        <label>字級 <input type="number" id="ftSize" value="10" step="1" min="6"> pt</label>
+        <label title="離邊緣的距離，數字越大越往內">邊距 <input type="number" id="ftGap" value="0.15" step="0.05" min="0"> cm</label>
+      </div>
+    </div>
+  </details>
+
+  <details>
+    <summary>📁 專案（本機）</summary>
+    <div class="grp">
+      <select id="projSel"><option value="">（未開啟專案）</option></select>
+      <div class="row2">
+        <button id="btnProjSave" style="background:#8e44ad;color:#fff">💾 存成專案</button>
+        <button id="btnProjOpen" style="background:#16a085;color:#fff">📂 開啟</button>
+        <button id="btnProjDel" style="background:#c0392b;color:#fff">🗑 刪除</button>
+      </div>
+      <div class="row2">
+        <button id="btnExport" style="background:#d35400;color:#fff">📤 匯出</button>
+        <button id="btnImport" style="background:#16a085;color:#fff">📥 匯入</button>
+        <input type="file" id="importFile" accept=".json,application/json" multiple hidden>
+      </div>
+    </div>
+  </details>
+
+  <details open>
+    <summary>☁️ 雲端專案</summary>
+    <div class="grp">
+      <label>資料夾
+        <select id="cloudFolder"><option value="">（全部）</option></select>
+      </label>
+      <select id="cloudSel"><option value="">（未登入）</option></select>
+      <div class="row2">
+        <button id="btnFolderNew" style="background:#7f8c8d;color:#fff">📁＋</button>
+        <button id="btnCloudOpen" style="background:#2c81ba;color:#fff">☁️⬇ 雲端開啟</button>
+        <button id="btnCloudLogin" style="background:#555;color:#fff">🔑 登入</button>
+      </div>
+    </div>
+  </details>
+
+</div>
+
+<div id="main">
 <div id="hint">
-  💡 推薦用「⬇ 下載 PDF」拿到檔案再列印，最穩定。直接列印請選：<b>邊界（Margins）＝無</b>、<b>縮放＝100%</b>、紙張 A4。
-  也可直接把圖片拖曳到本頁面加入。每頁右上角可 ✏️ 修圖（蓋掉不要的字）、✕ 刪除；<b>按住 ✥ 把手拖曳可調整順序，<b>⤒ 移到最前、🔢 直接輸入要移到第幾張、⤓ 移到最後</b>（不用拖很遠）；「版面」可切成一列 2～4 張，搬移更方便</b>。目錄頁的標題直接點擊就能輸入。
+  💡 每頁右上角可 ✏️ 修圖、✕ 刪除；<b>按住 ✥ 把手拖曳可調整順序，⤒ 移到最前、🔢 直接輸入要移到第幾張、⤓ 移到最後</b>。目錄頁標題直接點擊就能輸入。
   <br>📐 <b id="areaInfo"></b>
-  <br>💾 <b id="saveInfo">自動暫存準備中…</b>　｜　📁 做好的冊子按「💾 存成專案」可長期保存，下次從下拉選單「📂 開啟」就能繼續編輯
+  <br>💾 <b id="saveInfo">自動暫存準備中…</b>
   <span id="dlrow" style="display:none"><br>📄 <a id="manualDl" style="color:#b03;font-weight:bold"></a></span>
 </div>
-
 <div id="pages"><div id="empty">尚未加入圖片 — 點「＋ 加入圖片」或直接拖曳圖片到這裡</div></div>
+</div>
+</div>
 
 <div id="cloudMgr" hidden>
   <div id="cmBar">
@@ -410,6 +467,13 @@ const fileInput = document.getElementById('fileInput');
 const $ = id => document.getElementById(id);
 let db = null, saveTimer = null, restoring = false;   // 自動暫存狀態
 let tocTitles = [];                                    // 目錄標題（依內容頁順序）
+
+$('btnMenu').addEventListener('click', () => {
+  document.body.classList.toggle('panel-hidden');
+  try { localStorage.setItem('ws_panel_hidden', document.body.classList.contains('panel-hidden') ? '1' : ''); } catch (e) {}
+  applyViewZoom();
+});
+try { if (localStorage.getItem('ws_panel_hidden')) document.body.classList.add('panel-hidden'); } catch (e) {}
 
 $('btnAdd').addEventListener('click', () => fileInput.click());
 $('btnPrint').addEventListener('click', () => {
@@ -1550,8 +1614,9 @@ function applyViewZoom() {
   document.body.classList.toggle('multicol', cols > 1);
   let z;
   if (v === 'fit') {
-    const availH = window.innerHeight - $('panel').offsetHeight - $('hint').offsetHeight - 60;
-    const availW = document.documentElement.clientWidth - 40;
+    const availH = window.innerHeight - $('topbar').offsetHeight - $('hint').offsetHeight - 60;
+    const sideW = document.body.classList.contains('panel-hidden') ? 0 : ($('panel').offsetWidth || 300);
+    const availW = document.documentElement.clientWidth - sideW - 40;
     // A4 在螢幕上約 794×1123px；多欄時以寬度為主，讓整列剛好排得下
     const byW = (availW - (cols - 1) * 20) / (cols * 794);
     z = cols === 1 ? Math.min(availH / 1123, byW, 1) : Math.min(byW, 1);
