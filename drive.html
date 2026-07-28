@@ -186,6 +186,12 @@ async function refresh() {
   localStorage.setItem('drive_refresh', d.refresh_token || rt);
   return true;
 }
+/* 憑證過期的回應可能是 400/401/403，訊息含 JWT/exp，一律視為要換新憑證 */
+function needsRefresh(status, text) {
+  return status === 401 || status === 403 ||
+    (status === 400 && /jwt|exp|token/i.test(text || ''));
+}
+
 function setLoggedUI() {
   $('btnLogin').textContent = token ? '🚪 登出' : '🔑 登入';
   $('who').textContent = token ? (email || '') : '尚未登入';
@@ -213,7 +219,10 @@ async function list(displayPrefix) {
     method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ prefix: prefix, limit: 500, sortBy: { column: 'name', order: 'asc' } }),
   });
-  if (res.status === 401 || res.status === 403) { if (await refresh()) return list(displayPrefix); throw new Error('請重新登入'); }
+  if (!res.ok) {
+    const t = await res.clone().text();
+    if (needsRefresh(res.status, t)) { if (await refresh()) return list(displayPrefix); throw new Error('登入已過期，請按右上角重新登入'); }
+  }
   const d = await res.json();
   if (!Array.isArray(d)) throw new Error((d && d.message) || '讀取失敗');
   return d.map(x => Object.assign({}, x, { name: decName(x.name), rawName: x.name }));
@@ -239,7 +248,7 @@ async function signedUrl(displayKey) {
     method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ expiresIn: 3600 }),
   });
-  if (res.status === 401 || res.status === 403) { if (await refresh()) return signedUrl(displayKey); }
+  if (!res.ok) { const t = await res.clone().text(); if (needsRefresh(res.status, t) && await refresh()) return signedUrl(displayKey); }
   const d = await res.json();
   if (!d.signedURL) throw new Error('取得連結失敗');
   return SB_URL + '/storage/v1' + d.signedURL;
@@ -497,7 +506,11 @@ $('drop').addEventListener('click', () => $('fileInput').click());
   const t = localStorage.getItem('drive_token');
   if (t) { token = t; email = localStorage.getItem('drive_email'); }
   setLoggedUI();
-  if (token) await render(); else renderCrumbs();
+  if (token) {
+    await refresh();          // 每次開啟先換新憑證，避免過期看起來像檔案不見
+    setLoggedUI();
+    await render();
+  } else renderCrumbs();
 })();
 </script>
 </body>

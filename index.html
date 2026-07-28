@@ -764,6 +764,10 @@ function folderToKey(folder) { return ROOT_KEY + '/' + safeSeg(folder); }
 function keyToFolder(key) { return decName(key); }
 
 function cloudMsg(m) { setSaveInfo(m); }
+function needsRefresh(status, text) {
+  return status === 401 || status === 403 ||
+    (status === 400 && /jwt|exp|token/i.test(text || ''));
+}
 function sbHeaders(extra) {
   return Object.assign({ apikey: SB_KEY, Authorization: 'Bearer ' + (sbToken || SB_KEY) }, extra || {});
 }
@@ -809,7 +813,10 @@ async function cloudRawList(prefix) {
     method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ prefix: p, limit: 200, sortBy: { column: 'updated_at', order: 'desc' } }),
   });
-  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudRawList(prefix); throw new Error('請重新登入'); }
+  if (!res.ok) {
+    const t = await res.clone().text();
+    if (needsRefresh(res.status, t)) { if (await cloudRefresh()) return cloudRawList(prefix); throw new Error('登入已過期，請按「🔑 登入」重新登入'); }
+  }
   const d = await res.json();
   if (!Array.isArray(d)) throw new Error((d && d.message) || '讀取失敗');
   return d;
@@ -1144,6 +1151,7 @@ $('btnCloudOpen').addEventListener('click', async () => {
     if (!t) return;
     sbToken = t; sbEmail = localStorage.getItem('ws_sb_email');
     $('btnCloudLogin').textContent = '🚪 登出';
+    await cloudRefresh();     // 先換新憑證，避免過期造成「東西不見」的錯覺
     await refreshCloudList();
   } catch (e) {}
 })();
