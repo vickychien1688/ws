@@ -299,6 +299,15 @@
     <input type="file" id="importFile" accept=".json,application/json" multiple hidden>
   </span>
 
+  <span style="border-left:2px solid #46617c;padding-left:12px;display:flex;gap:8px;align-items:center">
+    <label>☁️ 雲端
+      <select id="cloudSel" style="max-width:200px"><option value="">（未登入）</option></select>
+    </label>
+    <button id="btnCloudSave" style="background:#2c81ba;color:#fff" title="把目前內容存到雲端">☁️⬆ 存到雲端</button>
+    <button id="btnCloudOpen" style="background:#2c81ba;color:#fff" title="從雲端開啟">☁️⬇ 雲端開啟</button>
+    <button id="btnCloudLogin" style="background:#555;color:#fff">🔑 登入</button>
+  </span>
+
   <button id="btnDownload">⬇ 下載 PDF</button>
   <button id="btnPrint">🖨 列印</button>
   <button id="btnClear">清空</button>
@@ -597,6 +606,176 @@ $('eddelete').addEventListener('click', () => {
   edSel = -1;
   edRedraw();
 });
+
+/* ===== 雲端儲存（Supabase Storage，私人空間 ws-projects） =====
+   登入後專案存在雲端，換電腦或清瀏覽器資料都不會不見。 */
+const SB_URL = 'https://nvnrkzveyehcnlaszzin.supabase.co';
+const SB_KEY = 'sb_publishable_8-cmiPFlZNzWu4VyhMA7dA_B0hteB1u';
+const SB_BUCKET = 'ws-projects';
+let sbToken = null, sbEmail = null;
+
+function cloudMsg(m) { setSaveInfo(m); }
+function sbHeaders(extra) {
+  return Object.assign({ apikey: SB_KEY, Authorization: 'Bearer ' + (sbToken || SB_KEY) }, extra || {});
+}
+
+async function cloudLogin(email, password) {
+  const res = await fetch(SB_URL + '/auth/v1/token?grant_type=password', {
+    method: 'POST',
+    headers: { apikey: SB_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  const d = await res.json();
+  if (!res.ok || !d.access_token) throw new Error(d.error_description || d.msg || '登入失敗');
+  sbToken = d.access_token;
+  sbEmail = (d.user && d.user.email) || email;
+  try {
+    localStorage.setItem('ws_sb_token', sbToken);
+    localStorage.setItem('ws_sb_email', sbEmail);
+    localStorage.setItem('ws_sb_refresh', d.refresh_token || '');
+  } catch (e) {}
+  return sbEmail;
+}
+
+async function cloudRefresh() {
+  const rt = localStorage.getItem('ws_sb_refresh');
+  if (!rt) return false;
+  const res = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+    method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: rt }),
+  });
+  const d = await res.json();
+  if (!res.ok || !d.access_token) return false;
+  sbToken = d.access_token; sbEmail = (d.user && d.user.email) || localStorage.getItem('ws_sb_email');
+  try {
+    localStorage.setItem('ws_sb_token', sbToken);
+    localStorage.setItem('ws_sb_refresh', d.refresh_token || rt);
+  } catch (e) {}
+  return true;
+}
+
+async function cloudList() {
+  const res = await fetch(SB_URL + '/storage/v1/object/list/' + SB_BUCKET, {
+    method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ prefix: '', limit: 100, sortBy: { column: 'updated_at', order: 'desc' } }),
+  });
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudList(); throw new Error('請重新登入'); }
+  const d = await res.json();
+  if (!Array.isArray(d)) throw new Error((d && d.message) || '讀取失敗');
+  return d.filter(f => f.name && f.name.endsWith('.json')).map(f => f.name.replace(/\.json$/, ''));
+}
+
+async function refreshCloudList(selected) {
+  const sel = $('cloudSel');
+  if (!sbToken) { sel.innerHTML = '<option value="">（未登入）</option>'; return; }
+  try {
+    const names = await cloudList();
+    sel.innerHTML = '<option value="">（選擇雲端專案）</option>' +
+      names.map(n => `<option value="${n.replace(/"/g, '&quot;')}">${n}</option>`).join('');
+    if (selected && names.includes(selected)) sel.value = selected;
+  } catch (e) { sel.innerHTML = '<option value="">（讀取失敗）</option>'; }
+}
+
+async function cloudUpload(name, payloadText) {
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + encodeURIComponent(name + '.json');
+  let res = await fetch(url, { method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json', 'x-upsert': 'true' }), body: payloadText });
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudUpload(name, payloadText); }
+  if (!res.ok) { const t = await res.text(); throw new Error(t.slice(0, 120)); }
+}
+
+async function cloudDownload(name) {
+  const url = SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + encodeURIComponent(name + '.json');
+  let res = await fetch(url, { headers: sbHeaders() });
+  if (res.status === 401 || res.status === 403) { if (await cloudRefresh()) return cloudDownload(name); }
+  if (!res.ok) throw new Error('下載失敗');
+  return await res.text();
+}
+
+/* 產生 / 還原專案內容（與匯出檔同格式） */
+async function buildPayload() {
+  const settings = {};
+  SETTING_IDS.forEach(id => { const el = $(id); settings[id] = el.type === 'checkbox' ? el.checked : el.value; });
+  const sheets = [...pages.querySelectorAll('.sheet:not(.toc)')];
+  const images = [];
+  for (let i = 0; i < sheets.length; i++) {
+    $('btnCloudSave').textContent = `打包 ${i + 1}/${sheets.length}…`;
+    images.push(await blobToCompressedDataUrl(sheets[i]._blob));
+  }
+  return JSON.stringify({ _type: 'a4tool-export', version: 1, part: 1, totalParts: 1, settings, tocTitles, images });
+}
+
+$('btnCloudLogin').addEventListener('click', async () => {
+  if (sbToken) {
+    sbToken = null; sbEmail = null;
+    try { localStorage.removeItem('ws_sb_token'); localStorage.removeItem('ws_sb_refresh'); } catch (e) {}
+    $('btnCloudLogin').textContent = '🔑 登入';
+    await refreshCloudList();
+    return cloudMsg('已登出雲端');
+  }
+  const email = prompt('雲端登入 Email：', localStorage.getItem('ws_sb_email') || 'vickychien127@gmail.com');
+  if (!email) return;
+  const pw = prompt('密碼（跟你 Supabase 帳號的密碼一樣）：');
+  if (!pw) return;
+  cloudMsg('登入中…');
+  try {
+    const who = await cloudLogin(email.trim(), pw);
+    $('btnCloudLogin').textContent = '🚪 登出';
+    await refreshCloudList();
+    cloudMsg(`✅ 已登入雲端（${who}）— 現在可以「☁️⬆ 存到雲端」`);
+  } catch (e) { cloudMsg('登入失敗：' + e.message); }
+});
+
+$('btnCloudSave').addEventListener('click', async () => {
+  if (!sbToken) return cloudMsg('請先按「🔑 登入」');
+  if (!pages.querySelector('.sheet:not(.toc)')) return cloudMsg('請先加入圖片');
+  const suggest = $('cloudSel').value || $('projSel').value || ('學習單 ' + new Date().toISOString().slice(0, 10));
+  const name = prompt('雲端專案名稱（同名會覆蓋）：', suggest);
+  if (!name) return;
+  const btn = $('btnCloudSave');
+  btn.disabled = true;
+  try {
+    const payload = await buildPayload();
+    btn.textContent = '上傳中…';
+    await cloudUpload(name, payload);
+    await refreshCloudList(name);
+    btn.textContent = '✅ 已存雲端';
+    cloudMsg(`☁️ 已存到雲端：「${name}」（${Math.round(payload.length / 1048576 * 10) / 10} MB）— 任何裝置登入都看得到`);
+  } catch (e) {
+    btn.textContent = '存雲端失敗';
+    cloudMsg('存到雲端失敗：' + e.message);
+  }
+  setTimeout(() => { btn.textContent = '☁️⬆ 存到雲端'; btn.disabled = false; }, 3000);
+});
+
+$('btnCloudOpen').addEventListener('click', async () => {
+  if (!sbToken) return cloudMsg('請先按「🔑 登入」');
+  const name = $('cloudSel').value;
+  if (!name) return cloudMsg('請先在「☁️ 雲端」選單選一個專案');
+  const btn = $('btnCloudOpen');
+  btn.disabled = true; btn.textContent = '下載中…';
+  try {
+    const txt = await cloudDownload(name);
+    const d = JSON.parse(txt);
+    applySnapshot({ settings: d.settings, tocTitles: d.tocTitles, images: (d.images || []).map(dataUrlToBlob) });
+    btn.textContent = '✅ 已開啟';
+    cloudMsg(`☁️ 已從雲端開啟「${name}」（${(d.images || []).length} 頁）`);
+  } catch (e) {
+    btn.textContent = '開啟失敗';
+    cloudMsg('雲端開啟失敗：' + e.message);
+  }
+  setTimeout(() => { btn.textContent = '☁️⬇ 雲端開啟'; btn.disabled = false; }, 3000);
+});
+
+/* 開啟頁面時自動恢復登入狀態 */
+(async () => {
+  try {
+    const t = localStorage.getItem('ws_sb_token');
+    if (!t) return;
+    sbToken = t; sbEmail = localStorage.getItem('ws_sb_email');
+    $('btnCloudLogin').textContent = '🚪 登出';
+    await refreshCloudList();
+  } catch (e) {}
+})();
 
 /* ===== 搬家：匯出 / 匯入（跨網站、跨電腦都可用） =====
    匯出成 .json 檔（圖片以 base64 存放）；超過大小上限會自動拆成多個檔案。
