@@ -145,6 +145,42 @@
   body.multicol .sheet.drop-before { box-shadow: -8px 0 0 -2px #2980b9, 0 3px 12px rgba(0,0,0,.25); }
   body.multicol .sheet.drop-after  { box-shadow: 8px 0 0 -2px #2980b9, 0 3px 12px rgba(0,0,0,.25); }
 
+  /* ===== 雲端管理 ===== */
+  #cloudMgr {
+    position: fixed; inset: 0; z-index: 120;
+    background: rgba(20,26,32,.95);
+    display: flex; flex-direction: column; color: #fff;
+  }
+  #cloudMgr[hidden] { display: none !important; }
+  #cmBar {
+    background: #2c3e50; padding: 12px 18px;
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 15px;
+  }
+  #cmBar button {
+    padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 14px; font-weight: bold; background: #46617c; color: #fff;
+  }
+  #cmClose { background: #7f8c8d !important; }
+  #cmPath { color: #ffd; font-size: 14px; }
+  #cmInfo { font-size: 13px; color: #cfe; }
+  #cmBody { flex: 1; overflow: auto; padding: 18px; }
+  .cmrow {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 14px; margin-bottom: 8px; border-radius: 8px;
+    background: rgba(255,255,255,.07);
+  }
+  .cmrow:hover { background: rgba(255,255,255,.14); }
+  .cmicon { font-size: 22px; }
+  .cmname { flex: 1; font-size: 16px; }
+  .cmmeta { font-size: 12px; color: #aab; min-width: 150px; text-align: right; }
+  .cmrow button {
+    padding: 5px 12px; border: none; border-radius: 5px; cursor: pointer;
+    font-size: 13px; font-weight: bold; background: #46617c; color: #fff;
+  }
+  .cmrow button.open { background: #16a085; }
+  .cmrow button.del { background: #c0392b; }
+  .cmempty { color: #9ab; padding: 40px; text-align: center; font-size: 15px; }
+
   /* ===== 簡單修圖 ===== */
   #editor {
     position: fixed; inset: 0; z-index: 100;
@@ -307,6 +343,7 @@
     <select id="cloudSel" style="max-width:190px"><option value="">（未登入）</option></select>
     <button id="btnCloudSave" style="background:#2c81ba;color:#fff" title="把目前內容存到雲端">☁️⬆ 存到雲端</button>
     <button id="btnCloudOpen" style="background:#2c81ba;color:#fff" title="從雲端開啟">☁️⬇ 雲端開啟</button>
+    <button id="btnCloudMgr" style="background:#34495e;color:#fff" title="像雲端硬碟一樣瀏覽、改名、搬移、刪除">🗂 雲端管理</button>
     <button id="btnCloudLogin" style="background:#555;color:#fff">🔑 登入</button>
   </span>
 
@@ -324,6 +361,18 @@
 </div>
 
 <div id="pages"><div id="empty">尚未加入圖片 — 點「＋ 加入圖片」或直接拖曳圖片到這裡</div></div>
+
+<div id="cloudMgr" hidden>
+  <div id="cmBar">
+    <b>🗂 雲端管理</b>
+    <span id="cmPath">全部</span>
+    <button id="cmNewFolder">📁＋ 新資料夾</button>
+    <button id="cmRefresh">🔄 重新整理</button>
+    <span id="cmInfo"></span>
+    <button id="cmClose" style="margin-left:auto">✕ 關閉</button>
+  </div>
+  <div id="cmBody"></div>
+</div>
 
 <div id="editor" hidden>
   <div id="edbar">
@@ -730,6 +779,122 @@ async function refreshCloudList(selected) {
 }
 
 $('cloudFolder').addEventListener('change', () => renderCloudSelects());
+
+/* ===== 雲端管理視窗（瀏覽 / 改名 / 搬移 / 刪除） ===== */
+let cmFolder = null;   // null = 首頁（看資料夾），字串 = 進入該資料夾
+
+async function cloudMove(fromKey, toKey) {
+  const res = await fetch(SB_URL + '/storage/v1/object/move', {
+    method: 'POST', headers: sbHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ bucketId: SB_BUCKET, sourceKey: fromKey, destinationKey: toKey }),
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+}
+async function cloudDelete(key) {
+  const res = await fetch(SB_URL + '/storage/v1/object/' + SB_BUCKET + '/' + key, {
+    method: 'DELETE', headers: sbHeaders(),
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+}
+function fmtSize(b) { return b ? (b > 1048576 ? (b/1048576).toFixed(1) + ' MB' : Math.round(b/1024) + ' KB') : ''; }
+function fmtDate(s) { if (!s) return ''; const d = new Date(s); return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; }
+
+async function cmRender() {
+  const body = $('cmBody');
+  body.innerHTML = '<div class="cmempty">讀取中…</div>';
+  $('cmPath').textContent = cmFolder === null ? '全部' : '📁 ' + cmFolder;
+  try {
+    const raw = await cloudRawList(cmFolder === null ? '' : folderToKey(cmFolder) + '/');
+    const rows = [];
+    if (cmFolder !== null) {
+      rows.push({ type: 'up' });
+    }
+    raw.forEach(f => {
+      if (f.id === null && /^f_[0-9a-f]+$/i.test(f.name)) rows.push({ type: 'folder', name: keyToFolder(f.name) });
+      else if (f.name && f.name.endsWith('.json')) rows.push({ type: 'file', name: keyToName(f.name), key: f.name,
+        size: f.metadata && f.metadata.size, updated: f.updated_at });
+    });
+    if (!rows.length) { body.innerHTML = '<div class="cmempty">這裡還沒有東西 — 回到主畫面按「☁️⬆ 存到雲端」就會出現</div>'; return; }
+    body.innerHTML = '';
+    rows.forEach(r => {
+      const div = document.createElement('div');
+      div.className = 'cmrow';
+      if (r.type === 'up') {
+        div.innerHTML = '<span class="cmicon">⬅️</span><span class="cmname">回上層</span>';
+        div.style.cursor = 'pointer';
+        div.onclick = () => { cmFolder = null; cmRender(); };
+      } else if (r.type === 'folder') {
+        div.innerHTML = `<span class="cmicon">📁</span><span class="cmname">${r.name}</span>
+          <span class="cmmeta">資料夾</span>`;
+        div.style.cursor = 'pointer';
+        div.onclick = () => { cmFolder = r.name; cmRender(); };
+      } else {
+        div.innerHTML = `<span class="cmicon">📄</span><span class="cmname">${r.name}</span>
+          <span class="cmmeta">${fmtSize(r.size)}　${fmtDate(r.updated)}</span>`;
+        const mk = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = fn; div.appendChild(b); };
+        mk('開啟', 'open', async () => {
+          try {
+            const txt = await cloudDownload(r.name, cmFolder === null ? '' : cmFolder);
+            const d = JSON.parse(txt);
+            applySnapshot({ settings: d.settings, tocTitles: d.tocTitles, images: (d.images || []).map(dataUrlToBlob) });
+            $('cloudMgr').hidden = true;
+            cloudMsg(`☁️ 已開啟「${r.name}」（${(d.images || []).length} 頁）`);
+          } catch (e) { alert('開啟失敗：' + e.message); }
+        });
+        mk('改名', '', async () => {
+          const nn = prompt('新名稱：', r.name);
+          if (!nn || nn === r.name) return;
+          try {
+            const from = (cmFolder === null ? '' : folderToKey(cmFolder) + '/') + r.key;
+            const to = nameToKey(nn, cmFolder === null ? '' : cmFolder);
+            await cloudMove(from, to); await cmRender(); await refreshCloudList();
+          } catch (e) { alert('改名失敗：' + e.message); }
+        });
+        mk('搬移', '', async () => {
+          const fs = cloudCache.folders;
+          const target = prompt('要搬到哪個資料夾？（留空＝移到最外層）\n現有資料夾：' + (fs.join('、') || '無'), cmFolder || '');
+          if (target === null) return;
+          try {
+            const from = (cmFolder === null ? '' : folderToKey(cmFolder) + '/') + r.key;
+            const to = nameToKey(r.name, target.trim());
+            await cloudMove(from, to);
+            if (target.trim() && !cloudCache.folders.includes(target.trim())) cloudCache.folders.push(target.trim());
+            await cmRender(); await refreshCloudList();
+          } catch (e) { alert('搬移失敗：' + e.message); }
+        });
+        mk('刪除', 'del', async () => {
+          if (!confirm(`確定要刪除「${r.name}」？此動作無法復原。`)) return;
+          try {
+            const key = (cmFolder === null ? '' : folderToKey(cmFolder) + '/') + r.key;
+            await cloudDelete(key); await cmRender(); await refreshCloudList();
+          } catch (e) { alert('刪除失敗：' + e.message); }
+        });
+      }
+      body.appendChild(div);
+    });
+    $('cmInfo').textContent = `共 ${rows.filter(r => r.type === 'file').length} 個專案`;
+  } catch (e) {
+    body.innerHTML = `<div class="cmempty">讀取失敗：${e.message}<br>（若顯示請重新登入，關閉後按「🔑 登入」）</div>`;
+  }
+}
+
+$('btnCloudMgr').addEventListener('click', async () => {
+  if (!sbToken) return cloudMsg('請先按「🔑 登入」');
+  cmFolder = null;
+  $('cloudMgr').hidden = false;
+  await cmRender();
+});
+$('cmClose').addEventListener('click', () => { $('cloudMgr').hidden = true; });
+$('cmRefresh').addEventListener('click', cmRender);
+$('cmNewFolder').addEventListener('click', () => {
+  const name = prompt('新資料夾名稱：');
+  if (!name) return;
+  if (!cloudCache.folders.includes(name)) cloudCache.folders.push(name);
+  renderCloudSelects();
+  $('cloudFolder').value = name;
+  renderCloudSelects();
+  alert(`已建立資料夾「${name}」。\n\n注意：雲端資料夾要「放進第一個專案」才會真正出現，\n關閉這個視窗後按「☁️⬆ 存到雲端」即可。`);
+});
 
 $('btnFolderNew').addEventListener('click', () => {
   if (!sbToken) return cloudMsg('請先按「🔑 登入」');
