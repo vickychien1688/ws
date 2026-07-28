@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vicky 的雲端硬碟</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "PingFang TC", "Microsoft JhengHei", sans-serif; background: #f4f6f8; color: #1c2733; }
+
+  header {
+    background: #2c3e50; color: #fff; padding: 14px 20px;
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    box-shadow: 0 2px 10px rgba(0,0,0,.2); position: sticky; top: 0; z-index: 20;
+  }
+  header h1 { font-size: 19px; }
+  header button, header label.btn {
+    padding: 8px 16px; border: none; border-radius: 7px; cursor: pointer;
+    font-size: 14px; font-weight: bold; background: #46617c; color: #fff;
+  }
+  #btnUpload { background: #27ae60; }
+  #btnNewFolder { background: #8e44ad; }
+  #btnLogin { background: #7f8c8d; }
+  #who { font-size: 13px; color: #cfe; margin-left: auto; }
+
+  #crumbs { padding: 12px 20px; background: #fff; border-bottom: 1px solid #e2e8ee; font-size: 15px; }
+  #crumbs a { color: #2980b9; cursor: pointer; text-decoration: none; }
+  #crumbs a:hover { text-decoration: underline; }
+
+  #msg { padding: 10px 20px; font-size: 14px; background: #fff8dc; color: #6b5d1f; display: none; }
+  #msg.show { display: block; }
+
+  #drop {
+    margin: 20px; padding: 40px; border: 3px dashed #b6c3d1; border-radius: 14px;
+    text-align: center; color: #7d8b99; background: #fff; font-size: 15px;
+  }
+  #drop.over { border-color: #27ae60; background: #eafaf1; color: #1e7a4a; }
+
+  #list { margin: 0 20px 40px; }
+  .row {
+    display: flex; align-items: center; gap: 14px;
+    background: #fff; border: 1px solid #e2e8ee; border-radius: 10px;
+    padding: 12px 16px; margin-bottom: 8px;
+  }
+  .row:hover { border-color: #b6c3d1; box-shadow: 0 2px 8px rgba(0,0,0,.06); }
+  .icon { font-size: 24px; width: 30px; text-align: center; }
+  .name { flex: 1; font-size: 16px; word-break: break-all; }
+  .name.link { cursor: pointer; color: #1c5f9e; font-weight: 600; }
+  .meta { font-size: 12px; color: #8794a2; min-width: 170px; text-align: right; }
+  .row button {
+    padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: bold; background: #46617c; color: #fff; margin-left: 4px;
+  }
+  .row button.get { background: #16a085; }
+  .row button.del { background: #c0392b; }
+  .empty { text-align: center; color: #8794a2; padding: 50px; font-size: 15px; }
+
+  #bar { height: 6px; background: #e2e8ee; border-radius: 3px; overflow: hidden; margin: 0 20px 14px; display: none; }
+  #bar.show { display: block; }
+  #bar div { height: 100%; width: 0; background: #27ae60; transition: width .2s; }
+
+  #prev { position: fixed; inset: 0; background: rgba(15,20,26,.93); z-index: 60; display: none; flex-direction: column; }
+  #prev.show { display: flex; }
+  #prevBar { padding: 12px 18px; color: #fff; display: flex; gap: 12px; align-items: center; }
+  #prevBar button { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; background: #46617c; color: #fff; }
+  #prevBody { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  #prevBody img { max-width: 100%; max-height: 100%; background: #fff; }
+  #prevBody iframe { width: 100%; height: 100%; border: none; background: #fff; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>☁️ Vicky 的雲端硬碟</h1>
+  <label class="btn" id="btnUpload" style="background:#27ae60">⬆ 上傳檔案
+    <input type="file" id="fileInput" multiple hidden>
+  </label>
+  <button id="btnNewFolder">📁＋ 新資料夾</button>
+  <button id="btnRefresh">🔄 重新整理</button>
+  <button id="btnLogin">🔑 登入</button>
+  <span id="who"></span>
+</header>
+
+<div id="crumbs"></div>
+<div id="msg"></div>
+<div id="bar"><div></div></div>
+
+<div id="drop">把檔案拖曳到這裡就能上傳 — 任何格式都可以（單檔可到 5 GB，一般學習單、PDF、照片都遠遠夠用）</div>
+<div id="list"><div class="empty">請先按右上角「🔑 登入」</div></div>
+
+<div id="prev">
+  <div id="prevBar">
+    <b id="prevName"></b>
+    <button id="prevDownload" style="margin-left:auto">⬇ 下載</button>
+    <button id="prevClose">✕ 關閉</button>
+  </div>
+  <div id="prevBody"></div>
+</div>
+
+<script>
+const SB_URL = 'https://nvnrkzveyehcnlaszzin.supabase.co';
+const SB_KEY = 'sb_publishable_8-cmiPFlZNzWu4VyhMA7dA_B0hteB1u';
+const BUCKET = 'vicky-drive';
+const $ = id => document.getElementById(id);
+
+let token = null, email = null, path = '';   // path 是「顯示用」的中文路徑
+
+/* Supabase 的 key 只接受英數與少數符號，中文一律轉 hex 編碼；顯示時再解回中文。
+   規則：名稱 → n_<hex>；副檔名保留，方便辨識與預覽。 */
+function encName(s) {
+  return 'n_' + Array.from(new TextEncoder().encode(s)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function decName(s) {
+  const m = /^n_([0-9a-f]+)(\..+)?$/i.exec(s);
+  if (!m) return s;
+  try { return new TextDecoder().decode(new Uint8Array(m[1].match(/../g).map(h => parseInt(h, 16)))) + (m[2] || ''); }
+  catch (e) { return s; }
+}
+function safeSeg(seg) {
+  return /^[A-Za-z0-9._\- ]+$/.test(seg) ? seg : (() => {
+    const dot = seg.lastIndexOf('.');
+    return dot > 0 ? encName(seg.slice(0, dot)) + seg.slice(dot) : encName(seg);
+  })();
+}
+/* 顯示路徑 → 實際 key 路徑 */
+function toKeyPath(display) {
+  return display ? display.split('/').map(safeSeg).join('/') : '';
+}
+
+function msg(t, keep) {
+  const m = $('msg');
+  m.textContent = t; m.classList.add('show');
+  if (!keep) setTimeout(() => { if (m.textContent === t) m.classList.remove('show'); }, 6000);
+}
+function headers(extra) {
+  return Object.assign({ apikey: SB_KEY, Authorization: 'Bearer ' + (token || SB_KEY) }, extra || {});
+}
+function fmtSize(b) {
+  if (!b) return '';
+  if (b > 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+  if (b > 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  return Math.max(1, Math.round(b / 1024)) + ' KB';
+}
+function fmtDate(s) {
+  if (!s) return '';
+  const d = new Date(s);
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function iconOf(name) {
+  const e = (name.split('.').pop() || '').toLowerCase();
+  if (['jpg','jpeg','png','gif','webp','heic','bmp','svg'].includes(e)) return '🖼';
+  if (e === 'pdf') return '📕';
+  if (['doc','docx'].includes(e)) return '📘';
+  if (['xls','xlsx','csv'].includes(e)) return '📗';
+  if (['ppt','pptx','key'].includes(e)) return '📙';
+  if (['mp4','mov','avi','mkv','webm'].includes(e)) return '🎬';
+  if (['mp3','wav','m4a','aac'].includes(e)) return '🎵';
+  if (['zip','rar','7z'].includes(e)) return '🗜';
+  return '📄';
+}
+
+/* ===== 登入 ===== */
+async function login(em, pw) {
+  const res = await fetch(SB_URL + '/auth/v1/token?grant_type=password', {
+    method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: em, password: pw }),
+  });
+  const d = await res.json();
+  if (!res.ok || !d.access_token) throw new Error(d.error_description || d.msg || '登入失敗');
+  token = d.access_token; email = (d.user && d.user.email) || em;
+  localStorage.setItem('drive_token', token);
+  localStorage.setItem('drive_refresh', d.refresh_token || '');
+  localStorage.setItem('drive_email', email);
+}
+async function refresh() {
+  const rt = localStorage.getItem('drive_refresh');
+  if (!rt) return false;
+  const res = await fetch(SB_URL + '/auth/v1/token?grant_type=refresh_token', {
+    method: 'POST', headers: { apikey: SB_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: rt }),
+  });
+  const d = await res.json();
+  if (!res.ok || !d.access_token) return false;
+  token = d.access_token;
+  localStorage.setItem('drive_token', token);
+  localStorage.setItem('drive_refresh', d.refresh_token || rt);
+  return true;
+}
+function setLoggedUI() {
+  $('btnLogin').textContent = token ? '🚪 登出' : '🔑 登入';
+  $('who').textContent = token ? (email || '') : '尚未登入';
+}
+$('btnLogin').addEventListener('click', async () => {
+  if (token) {
+    token = null; email = null;
+    ['drive_token','drive_refresh'].forEach(k => localStorage.removeItem(k));
+    setLoggedUI(); $('list').innerHTML = '<div class="empty">已登出</div>';
+    return;
+  }
+  const em = prompt('Email：', localStorage.getItem('drive_email') || 'vickychien127@gmail.com');
+  if (!em) return;
+  const pw = prompt('密碼：');
+  if (!pw) return;
+  msg('登入中…');
+  try { await login(em.trim(), pw); setLoggedUI(); await render(); msg('✅ 已登入'); }
+  catch (e) { msg('登入失敗：' + e.message); }
+});
+
+/* ===== 檔案操作 ===== */
+async function list(displayPrefix) {
+  const prefix = displayPrefix ? toKeyPath(displayPrefix.replace(/\/$/, '')) + '/' : '';
+  const res = await fetch(SB_URL + '/storage/v1/object/list/' + BUCKET, {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ prefix: prefix, limit: 500, sortBy: { column: 'name', order: 'asc' } }),
+  });
+  if (res.status === 401 || res.status === 403) { if (await refresh()) return list(displayPrefix); throw new Error('請重新登入'); }
+  const d = await res.json();
+  if (!Array.isArray(d)) throw new Error((d && d.message) || '讀取失敗');
+  return d.map(x => Object.assign({}, x, { name: decName(x.name), rawName: x.name }));
+}
+async function upload(file, prefix, onProgress) {
+  const key = toKeyPath((prefix ? prefix + '/' : '') + file.name);
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', SB_URL + '/storage/v1/object/' + BUCKET + '/' + encodeURI(key));
+    xhr.setRequestHeader('apikey', SB_KEY);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + token);
+    xhr.setRequestHeader('x-upsert', 'true');
+    if (file.type) xhr.setRequestHeader('Content-Type', file.type);
+    xhr.upload.onprogress = e => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300) ? resolve() : reject(new Error(xhr.responseText.slice(0, 150)));
+    xhr.onerror = () => reject(new Error('網路錯誤'));
+    xhr.send(file);
+  });
+}
+async function signedUrl(displayKey) {
+  const key = toKeyPath(displayKey);
+  const res = await fetch(SB_URL + '/storage/v1/object/sign/' + BUCKET + '/' + encodeURI(key), {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ expiresIn: 3600 }),
+  });
+  if (res.status === 401 || res.status === 403) { if (await refresh()) return signedUrl(displayKey); }
+  const d = await res.json();
+  if (!d.signedURL) throw new Error('取得連結失敗');
+  return SB_URL + '/storage/v1' + d.signedURL;
+}
+async function move(from, to) {
+  const res = await fetch(SB_URL + '/storage/v1/object/move', {
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ bucketId: BUCKET, sourceKey: toKeyPath(from), destinationKey: toKeyPath(to) }),
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+}
+async function remove(displayKey) {
+  const res = await fetch(SB_URL + '/storage/v1/object/' + BUCKET + '/' + encodeURI(toKeyPath(displayKey)), {
+    method: 'DELETE', headers: headers(),
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+}
+async function makeFolder(name) {
+  const key = toKeyPath((path ? path + '/' : '') + name) + '/.emptyFolderPlaceholder';
+  const res = await fetch(SB_URL + '/storage/v1/object/' + BUCKET + '/' + encodeURI(key), {
+    method: 'POST', headers: headers({ 'Content-Type': 'text/plain', 'x-upsert': 'true' }), body: '',
+  });
+  if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+}
+async function removeFolder(folderPath) {
+  const inside = await list(folderPath + '/');
+  for (const f of inside) {
+    if (f.id === null) await removeFolder(folderPath + '/' + f.name);
+    else await remove(folderPath + '/' + f.name);
+  }
+  // 佔位檔（不會出現在 list 的解碼結果中時仍要清掉）
+  try { await remove(folderPath + '/.emptyFolderPlaceholder'); } catch (e) {}
+}
+
+/* ===== 畫面 ===== */
+function renderCrumbs() {
+  const parts = path ? path.split('/') : [];
+  let acc = '';
+  const links = parts.map(p => { acc = acc ? acc + '/' + p : p; return `<a data-p="${acc}">${p}</a>`; });
+  $('crumbs').innerHTML = '📂 <a data-p="">我的雲端硬碟</a>' + links.map(l => ' / ' + l).join('');
+  $('crumbs').querySelectorAll('a').forEach(a => a.onclick = () => { path = a.dataset.p; render(); });
+}
+
+async function render() {
+  renderCrumbs();
+  const box = $('list');
+  if (!token) { box.innerHTML = '<div class="empty">請先按右上角「🔑 登入」</div>'; return; }
+  box.innerHTML = '<div class="empty">讀取中…</div>';
+  try {
+    const items = await list(path ? path + '/' : '');
+    const folders = items.filter(f => f.id === null);
+    const files = items.filter(f => f.id !== null && f.name !== '.emptyFolderPlaceholder');
+    if (!folders.length && !files.length) {
+      box.innerHTML = '<div class="empty">這個資料夾是空的 — 拖曳檔案進來或按「⬆ 上傳檔案」</div>';
+      return;
+    }
+    box.innerHTML = '';
+    folders.forEach(f => {
+      const full = (path ? path + '/' : '') + f.name;
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<span class="icon">📁</span><span class="name link">${f.name}</span><span class="meta">資料夾</span>`;
+      row.querySelector('.name').onclick = () => { path = full; render(); };
+      const del = document.createElement('button');
+      del.textContent = '刪除'; del.className = 'del';
+      del.onclick = async () => {
+        if (!confirm(`確定要刪除資料夾「${f.name}」和裡面的全部內容？`)) return;
+        msg('刪除中…', true);
+        try { await removeFolder(full); await render(); msg('已刪除'); }
+        catch (e) { msg('刪除失敗：' + e.message); }
+      };
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+    files.forEach(f => {
+      const full = (path ? path + '/' : '') + f.name;
+      const size = f.metadata && f.metadata.size;
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<span class="icon">${iconOf(f.name)}</span>
+        <span class="name link">${f.name}</span>
+        <span class="meta">${fmtSize(size)}　${fmtDate(f.updated_at)}</span>`;
+      row.querySelector('.name').onclick = () => preview(full, f.name);
+      const mk = (label, cls, fn) => { const b = document.createElement('button'); b.textContent = label; if (cls) b.className = cls; b.onclick = fn; row.appendChild(b); };
+      mk('下載', 'get', async () => {
+        try {
+          const url = await signedUrl(full);
+          const a = document.createElement('a'); a.href = url; a.download = f.name;
+          document.body.appendChild(a); a.click(); a.remove();
+        } catch (e) { msg('下載失敗：' + e.message); }
+      });
+      mk('改名', '', async () => {
+        const nn = prompt('新檔名：', f.name);
+        if (!nn || nn === f.name) return;
+        try { await move(full, (path ? path + '/' : '') + nn); await render(); }
+        catch (e) { msg('改名失敗：' + e.message); }
+      });
+      mk('搬移', '', async () => {
+        const t = prompt('搬到哪個資料夾？（用 / 分隔，留空＝最外層）\n例如：教材/2026暑期', path);
+        if (t === null) return;
+        try { await move(full, (t.trim() ? t.trim() + '/' : '') + f.name); await render(); }
+        catch (e) { msg('搬移失敗：' + e.message); }
+      });
+      mk('刪除', 'del', async () => {
+        if (!confirm(`確定要刪除「${f.name}」？`)) return;
+        try { await remove(full); await render(); }
+        catch (e) { msg('刪除失敗：' + e.message); }
+      });
+      box.appendChild(row);
+    });
+  } catch (e) {
+    box.innerHTML = `<div class="empty">讀取失敗：${e.message}</div>`;
+  }
+}
+
+/* ===== 預覽 ===== */
+async function preview(key, name) {
+  const e = (name.split('.').pop() || '').toLowerCase();
+  const canImg = ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(e);
+  const canPdf = e === 'pdf';
+  if (!canImg && !canPdf) {
+    try {
+      const url = await signedUrl(key);
+      const a = document.createElement('a'); a.href = url; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (err) { msg('開啟失敗：' + err.message); }
+    return;
+  }
+  try {
+    const url = await signedUrl(key);
+    $('prevName').textContent = name;
+    $('prevBody').innerHTML = canImg ? `<img src="${url}">` : `<iframe src="${url}"></iframe>`;
+    $('prevDownload').onclick = () => { const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); };
+    $('prev').classList.add('show');
+  } catch (err) { msg('預覽失敗：' + err.message); }
+}
+$('prevClose').onclick = () => { $('prev').classList.remove('show'); $('prevBody').innerHTML = ''; };
+
+/* ===== 上傳 ===== */
+async function doUpload(files) {
+  if (!token) return msg('請先登入');
+  const arr = [...files];
+  if (!arr.length) return;
+  $('bar').classList.add('show');
+  for (let i = 0; i < arr.length; i++) {
+    const f = arr[i];
+    msg(`上傳中 ${i + 1}/${arr.length}：${f.name}`, true);
+    try {
+      await upload(f, path, p => { $('bar').firstElementChild.style.width = Math.round(p * 100) + '%'; });
+    } catch (e) {
+      let why = e.message;
+      if (/exceeded the maximum allowed size|Payload too large|413/i.test(why)) why = '檔案超過單檔上限（5 GB）';
+      if (/row-level security|403/i.test(why)) why = '沒有權限，請重新登入';
+      msg(`「${f.name}」上傳失敗：${why}`);
+    }
+    $('bar').firstElementChild.style.width = '0';
+  }
+  $('bar').classList.remove('show');
+  msg(`✅ 已上傳 ${arr.length} 個檔案`);
+  await render();
+}
+$('fileInput').addEventListener('change', e => { doUpload(e.target.files); e.target.value = ''; });
+$('btnRefresh').addEventListener('click', render);
+$('btnNewFolder').addEventListener('click', async () => {
+  if (!token) return msg('請先登入');
+  const name = prompt('新資料夾名稱：');
+  if (!name) return;
+  try { await makeFolder(name.trim()); await render(); msg(`已建立資料夾「${name.trim()}」`); }
+  catch (e) { msg('建立失敗：' + e.message); }
+});
+
+['dragenter','dragover'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
+['dragleave','drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); if (ev === 'drop' || e.target === $('drop')) $('drop').classList.remove('over'); }));
+document.addEventListener('drop', e => { e.preventDefault(); if (e.dataTransfer.files.length) doUpload(e.dataTransfer.files); });
+$('drop').addEventListener('click', () => $('fileInput').click());
+
+/* 啟動：自動恢復登入 */
+(async () => {
+  const t = localStorage.getItem('drive_token');
+  if (t) { token = t; email = localStorage.getItem('drive_email'); }
+  setLoggedUI();
+  if (token) await render(); else renderCrumbs();
+})();
+</script>
+</body>
+</html>
