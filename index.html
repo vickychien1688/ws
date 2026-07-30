@@ -450,6 +450,7 @@
     <button data-tool="pick">🎯 吸取顏色</button>
     <button data-tool="copy">✂ 選取複製</button>
     <button data-tool="cut">✄ 剪下</button>
+    <button data-tool="ai" style="background:#8e44ad">✨ AI 框選修改</button>
     <button id="edAddText" style="background:#8e44ad">🅰 加文字</button>
     <label>字型 <select id="edTxtFont"></select></label>
     <label>字級 <input type="number" id="edTxtSize" value="48" step="4" min="8" style="width:64px"></label>
@@ -718,6 +719,56 @@ function edRedraw() {
     }
   });
   $('eddelete').disabled = edSel < 0;
+}
+
+/* ===== AI 局部修改：框選一塊區域，用文字描述要改成什麼 ===== */
+const aiFnUrl = () => SB_URL + '/functions/v1/ws-ai-edit';
+
+async function aiEditRegion(rect) {
+  if (!sbToken) { alert('請先在主畫面按「🔑 登入」'); return; }
+  const instruction = prompt('這一塊要改成什麼？（中英文都可以）\n例如：把鏡子換成放大鏡／把背景雜物清乾淨／改成藍色', '');
+  if (!instruction || !instruction.trim()) return;
+  const hint = $('edhint');
+  hint.textContent = '✨ AI 處理中，約 15～40 秒，請稍候…';
+  try {
+    // 取框選區域＋周邊環境的正方形，AI 才知道怎麼銜接
+    const pad = Math.round(Math.max(rect.w, rect.h) * 0.6);
+    let side = Math.min(Math.max(rect.w, rect.h) + pad * 2, Math.min(baseC.width, baseC.height));
+    let sx = Math.max(0, Math.min(Math.round(rect.x + rect.w / 2 - side / 2), baseC.width - side));
+    let sy = Math.max(0, Math.min(Math.round(rect.y + rect.h / 2 - side / 2), baseC.height - side));
+
+    const S = 1024;
+    const src = document.createElement('canvas');
+    src.width = S; src.height = S;
+    src.getContext('2d').drawImage(baseC, sx, sy, side, side, 0, 0, S, S);
+
+    // 遮罩：白色＝保留、透明＝要 AI 重畫
+    const mk = document.createElement('canvas');
+    mk.width = S; mk.height = S;
+    const mg = mk.getContext('2d');
+    mg.fillStyle = '#ffffff'; mg.fillRect(0, 0, S, S);
+    const k = S / side;
+    mg.clearRect((rect.x - sx) * k, (rect.y - sy) * k, rect.w * k, rect.h * k);
+
+    const res = await fetch(aiFnUrl(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + sbToken, apikey: SB_KEY },
+      body: JSON.stringify({ image: src.toDataURL('image/png'), mask: mk.toDataURL('image/png'),
+                             prompt: instruction.trim(), size: '1024x1024' }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || !out.image) throw new Error(out.error || ('AI 修改失敗（' + res.status + '）'));
+
+    const im = new Image();
+    await new Promise((ok, bad) => { im.onload = ok; im.onerror = bad; im.src = out.image; });
+    edPushUndo();
+    baseG.drawImage(im, 0, 0, im.naturalWidth, im.naturalHeight, sx, sy, side, side);
+    edRedraw();
+    hint.textContent = '✨ 完成！不滿意可按「↩ 復原」，或再框一次重改';
+  } catch (e) {
+    hint.textContent = '✨ AI 修改失敗：' + e.message;
+    alert('AI 修改失敗：' + e.message);
+  }
 }
 
 /* ===== 文字圖層：在圖片上打字（可拖曳、縮放、雙擊修改） ===== */
@@ -1503,6 +1554,11 @@ edCanvas.addEventListener('pointerup', e => {
       if (edTool === 'rect') {
         edPushUndo();
         baseG.fillStyle = edColor; baseG.fillRect(x, y, w, h);
+      } else if (edTool === 'ai') {
+        edRedraw();
+        edDrawing = false; edRectStart = null; edAction = null;
+        aiEditRegion({ x, y, w, h });
+        return;
       } else if (edTool === 'copy' || edTool === 'cut') {
         const pc = document.createElement('canvas');
         pc.width = Math.round(w); pc.height = Math.round(h);
