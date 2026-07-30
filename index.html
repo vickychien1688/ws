@@ -361,14 +361,7 @@
         </select>
       </label>
       <div class="row2">
-        <label>字型
-          <select id="ftFont">
-            <option value="sans" selected>黑體</option>
-            <option value="serif">明體</option>
-            <option value="kai">楷體</option>
-            <option value="round">圓體</option>
-          </select>
-        </label>
+        <label>字型 <select id="ftFont"></select></label>
       </div>
       <div class="row2">
         <label>粗細
@@ -457,6 +450,11 @@
     <button data-tool="pick">🎯 吸取顏色</button>
     <button data-tool="copy">✂ 選取複製</button>
     <button data-tool="cut">✄ 剪下</button>
+    <button id="edAddText" style="background:#8e44ad">🅰 加文字</button>
+    <label>字型 <select id="edTxtFont"></select></label>
+    <label>字級 <input type="number" id="edTxtSize" value="48" step="4" min="8" style="width:64px"></label>
+    <label>顏色 <input type="color" id="edTxtColor" value="#000000" style="width:42px;height:28px;padding:0;border:none;border-radius:5px"></label>
+    <label><input type="checkbox" id="edTxtBold" checked> 粗體</label>
     <button id="edpaste" disabled>📋 貼上</button>
     <button id="eddelete" disabled>🗑 刪除選取</button>
     <span id="edswatch" title="目前遮蓋顏色"></span>
@@ -721,6 +719,74 @@ function edRedraw() {
   });
   $('eddelete').disabled = edSel < 0;
 }
+
+/* ===== 文字圖層：在圖片上打字（可拖曳、縮放、雙擊修改） ===== */
+function makeTextCanvas(text, opt) {
+  const lines = String(text).split('\n');
+  const fam = FT_FONTS[opt.font] || FT_FONTS.sans;
+  const size = opt.size || 48;
+  const weight = opt.bold ? '700' : '400';
+  const pad = Math.round(size * 0.25);
+  const meas = document.createElement('canvas').getContext('2d');
+  meas.font = `${weight} ${size}px ${fam}`;
+  const wid = Math.max(...lines.map(l => meas.measureText(l).width));
+  const lineH = Math.round(size * 1.28);
+  const c = document.createElement('canvas');
+  c.width = Math.ceil(wid) + pad * 2;
+  c.height = lineH * lines.length + pad * 2;
+  const g = c.getContext('2d');
+  if (opt.bg && opt.bg !== 'none') { g.fillStyle = opt.bg; g.fillRect(0, 0, c.width, c.height); }
+  g.font = `${weight} ${size}px ${fam}`;
+  g.fillStyle = opt.color || '#000';
+  g.textBaseline = 'top';
+  lines.forEach((l, i) => g.fillText(l, pad, pad + i * lineH));
+  return c;
+}
+
+function currentTextOpt() {
+  return {
+    font: $('edTxtFont').value,
+    size: parseFloat($('edTxtSize').value) || 48,
+    color: $('edTxtColor').value,
+    bold: $('edTxtBold').checked,
+  };
+}
+
+function addTextLayer(text, opt, at) {
+  const o = Object.assign({}, opt);
+  const c = makeTextCanvas(text, o);
+  const x = at ? at.x - c.width / 2 : (edCanvas.width - c.width) / 2;
+  const y = at ? at.y - c.height / 2 : (edCanvas.height - c.height) / 2;
+  edObjects.push({ canvas: c, x, y, w: c.width, h: c.height, isText: true, text, opt: o });
+  edSel = edObjects.length - 1;
+  edRedraw();
+}
+
+$('edAddText').addEventListener('click', () => {
+  const t = prompt('要加什麼字？（可換行）', '');
+  if (t === null || !t.trim()) return;
+  addTextLayer(t, currentTextOpt());
+  $('edhint').textContent = '✔ 文字已加入：拖曳可移動、拉四角可縮放、雙擊可改字；完成後按「✅ 完成」';
+});
+
+/* 雙擊文字圖層 → 修改文字（保持位置與大小比例） */
+edCanvas.addEventListener('dblclick', e => {
+  const p = edPoint(e);
+  for (let i = edObjects.length - 1; i >= 0; i--) {
+    const o = edObjects[i];
+    if (!o.isText) continue;
+    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) {
+      const t = prompt('修改文字：', o.text);
+      if (t === null) return;
+      const scale = o.w / o.canvas.width;
+      const c = makeTextCanvas(t, o.opt);
+      o.canvas = c; o.text = t;
+      o.w = c.width * scale; o.h = c.height * scale;
+      edSel = i; edRedraw();
+      return;
+    }
+  }
+});
 
 /* 📋 貼上＝新增一個圖層；同一份內容可連續貼很多層（位置稍微錯開） */
 $('edpaste').addEventListener('click', () => {
@@ -1518,7 +1584,26 @@ const FT_FONTS = {
   serif: '"Songti TC","PMingLiU",serif',
   kai:   '"Kaiti TC","BiauKai","DFKai-SB",serif',
   round: '"Yuanti TC","Microsoft JhengHei",sans-serif',
+  /* 英文教材常用字型 */
+  comic:    '"Comic Sans MS","Comic Sans","Chalkboard SE",cursive',
+  chalk:    '"Chalkboard SE","Comic Sans MS",cursive',
+  marker:   '"Marker Felt","Comic Sans MS",cursive',
+  bradley:  '"Bradley Hand","Marker Felt",cursive',
+  arial:    'Arial,"Helvetica Neue",Helvetica,sans-serif',
+  georgia:  'Georgia,"Times New Roman",serif',
+  times:    '"Times New Roman",Times,serif',
+  courier:  '"Courier New",Courier,monospace',
+  impact:   'Impact,"Arial Black",sans-serif',
 };
+const FONT_LABELS = [
+  ['comic','Comic Sans MS'], ['chalk','Chalkboard'], ['marker','Marker Felt'], ['bradley','Bradley Hand'],
+  ['arial','Arial'], ['georgia','Georgia'], ['times','Times New Roman'], ['courier','Courier New'], ['impact','Impact'],
+  ['sans','黑體（中文）'], ['kai','楷體（中文）'], ['serif','明體（中文）'], ['round','圓體（中文）'],
+];
+function fontOptionsHtml(sel) {
+  return FONT_LABELS.map(([v, t]) =>
+    `<option value="${v}"${v === sel ? ' selected' : ''} style="font-family:${FT_FONTS[v]}">${t}</option>`).join('');
+}
 
 /* ===== 額外文字方塊（可新增多段，各自設定位置與字型） ===== */
 function getExtras() {
@@ -1557,9 +1642,7 @@ function renderExtraUI() {
       <input type="text" data-k="text" placeholder="要顯示的文字">
       <label>位置 <select data-k="pos">${XT_POS.map(([v, t]) => `<option value="${v}">${t}</option>`).join('')}</select></label>
       <div class="row2">
-        <label>字型 <select data-k="font">
-          <option value="sans">黑體</option><option value="serif">明體</option>
-          <option value="kai">楷體</option><option value="round">圓體</option></select></label>
+        <label>字型 <select data-k="font">${fontOptionsHtml(it.font)}</select></label>
       </div>
       <div class="row2">
         <label>粗細 <select data-k="weight">
@@ -1779,6 +1862,10 @@ $('zoomSlider').addEventListener('input', () => {   // 拉滑桿＝切到自訂�
 });
 
 const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap','ftGapX','extraTexts'];
+// 填入字型選單（頁尾文字＝黑體、修圖打字＝Comic Sans）
+$('ftFont').innerHTML = fontOptionsHtml('sans');
+$('edTxtFont').innerHTML = fontOptionsHtml('comic');
+
 SETTING_IDS.forEach(id => $(id).addEventListener('input', refresh));
 refresh();
 
