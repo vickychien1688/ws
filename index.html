@@ -531,6 +531,7 @@
         <button id="lyrUp">⬆ 上移一層</button>
         <button id="lyrDown">⬇ 下移一層</button>
         <button id="lyrBottom">⏬ 移到最下</button>
+        <button id="lyrCopy" style="grid-column:1/3;background:#8e44ad">⧉ 複製這層，別頁也能貼</button>
       </div>
       <div id="edLayerTip">直接上下拖曳就能換順序，也可以用下面的按鈕。背景那一層是底圖，筆刷、遮蓋、標註都畫在它上面。</div>
     </div>
@@ -884,6 +885,7 @@ function syncLayerBtns() {
   $('lyrUp').disabled = !has || edSel === top;
   $('lyrDown').disabled = !has || edSel === 0;
   $('lyrBottom').disabled = !has || edSel === 0;
+  $('lyrCopy').disabled = !has;
 }
 
 $('edLayerList').addEventListener('click', e => {
@@ -918,6 +920,20 @@ function moveLayer(to) {
   edRedraw();
   renderLayerList();
 }
+/* ⧉ 把選取的圖層放進跨頁剪貼簿：連現在的大小與去背結果一起帶走 */
+$('lyrCopy').addEventListener('click', () => {
+  if (edSel < 0) return;
+  const o = edObjects[edSel];
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(o.w));           // 烘焙成目前看到的大小
+  c.height = Math.max(1, Math.round(o.h));
+  c.getContext('2d').drawImage(o.canvas, 0, 0, c.width, c.height);
+  clipPatch = { canvas: c, srcW: edCanvas.width };
+  $('edpaste').disabled = false;
+  $('edhint').textContent = '⧉ 已複製「' + layerName(o) + '」。接著按「✅ 完成」回到頁面清單，' +
+                            '點下一頁的 ✏️ 進來後按「📋 貼上」就會出現（同一頁也可以再貼一份）';
+});
+
 $('lyrTop').addEventListener('click', () => moveLayer(edObjects.length - 1));
 $('lyrUp').addEventListener('click', () => moveLayer(edSel + 1));
 $('lyrDown').addEventListener('click', () => moveLayer(edSel - 1));
@@ -1350,6 +1366,8 @@ window.addEventListener('paste', ev => {
                        y: (edCanvas.height - c.height * k) / 2 + off,
                        w: c.width * k, h: c.height * k });
       edSel = edObjects.length - 1;
+      clipPatch = { canvas: c, srcW: edCanvas.width };   // 記進跨頁剪貼簿，換頁也貼得到
+      $('edpaste').disabled = false;
       edRedraw();
       renderLayerList();
       $('edhint').textContent = '✔ 已從剪貼簿貼上：拖曳移動、拉四角縮放；要去掉白底就按「🪄 去背」';
