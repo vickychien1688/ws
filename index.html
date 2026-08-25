@@ -270,6 +270,26 @@
   #edLayerBtns { padding: 8px; border-top: 2px solid #1b2530; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
   #edLayerBtns button { padding: 7px 4px; font-size: 13px; }
   #edLayerTip { font-size: 11px; color: #9fb4c7; padding: 0 8px 8px; line-height: 1.5; }
+  .lyr[data-i] { cursor: grab; }
+  .lyr.dragging { opacity: .4; cursor: grabbing; }
+  .lyr.drop-before { box-shadow: 0 -6px 0 -2px #f39c12; }
+  .lyr.drop-after  { box-shadow: 0 6px 0 -2px #f39c12; }
+
+  /* ===== 選色小面板（鋪底色、空白頁共用） ===== */
+  .cpick-mask { position: fixed; inset: 0; z-index: 200; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; }
+  .cpick { background: #fff; border-radius: 12px; padding: 18px 20px; width: 320px; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+  .cpick h3 { margin: 0 0 4px; font-size: 16px; }
+  .cpick p { margin: 0 0 12px; font-size: 12px; color: #667; }
+  .cpick-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 14px; }
+  .cpick-sw { height: 46px; border-radius: 8px; border: 2px solid #dde; cursor: pointer; position: relative; }
+  .cpick-sw:hover { border-color: #e67e22; transform: scale(1.05); }
+  .cpick-sw span { position: absolute; bottom: 2px; left: 0; right: 0; font-size: 10px; color: #667; text-align: center; }
+  .cpick-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 13px; }
+  .cpick-row input[type=color] { width: 52px; height: 34px; padding: 0; border: 1px solid #ccd; border-radius: 6px; cursor: pointer; }
+  .cpick-btns { display: flex; gap: 8px; justify-content: flex-end; }
+  .cpick-btns button { padding: 8px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: bold; }
+  .cpick-ok { background: #27ae60; color: #fff; }
+  .cpick-no { background: #dde; color: #334; }
   #edcanvas { background: #fff; cursor: crosshair; touch-action: none; box-shadow: 0 0 20px rgba(0,0,0,.5); }
 
   @media print {
@@ -512,7 +532,7 @@
         <button id="lyrDown">⬇ 下移一層</button>
         <button id="lyrBottom">⏬ 移到最下</button>
       </div>
-      <div id="edLayerTip">點清單選圖層，也可以直接在圖上點。背景那一層是底圖，筆刷、遮蓋、標註都畫在它上面。</div>
+      <div id="edLayerTip">直接上下拖曳就能換順序，也可以用下面的按鈕。背景那一層是底圖，筆刷、遮蓋、標註都畫在它上面。</div>
     </div>
   </div>
 </div>
@@ -535,21 +555,19 @@ $('btnAdd').addEventListener('click', () => fileInput.click());
 
 /* ＋ 空白頁：做一張純色的頁面，可以從零開始鋪底色、疊圖 */
 $('btnBlank').addEventListener('click', () => {
-  const c = prompt('空白頁要什麼底色？（色碼，例如 #ffffff 白、#fff6e5 米色、#eaf4ff 淺藍）', '#ffffff');
-  if (c === null) return;
-  const t = String(c).trim();
-  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(t)) { alert('請輸入 #ffffff 這種格式的色碼'); return; }
-  const cv = document.createElement('canvas');
-  cv.width = 2480; cv.height = 3508;            // A4 300dpi
-  const g = cv.getContext('2d');
-  g.fillStyle = t;
-  g.fillRect(0, 0, cv.width, cv.height);
-  cv.toBlob(b => {
-    if (!b) return;
-    addBlob(b);
-    refresh();
-    setSaveInfo('已加入一張空白頁 — 點該頁的 ✏️ 就能鋪底色、貼圖、排圖層');
-  }, 'image/jpeg', 0.97);
+  pickColor('新增空白頁', '會加入一張 A4 大小的純色頁，之後還能進去換底色。', '#ffffff', col => {
+    const cv = document.createElement('canvas');
+    cv.width = 2480; cv.height = 3508;            // A4 300dpi
+    const g = cv.getContext('2d');
+    g.fillStyle = col;
+    g.fillRect(0, 0, cv.width, cv.height);
+    cv.toBlob(b => {
+      if (!b) return;
+      addBlob(b);
+      refresh();
+      setSaveInfo('已加入一張空白頁 — 點該頁的 ✏️ 就能鋪底色、貼圖、排圖層');
+    }, 'image/jpeg', 0.97);
+  });
 });
 $('btnPrint').addEventListener('click', () => {
   try { window.print(); }
@@ -821,6 +839,7 @@ function renderLayerList() {
     const d = document.createElement('div');
     d.className = 'lyr' + (i === edSel ? ' on' : '');
     d.dataset.i = i;
+    d.draggable = true;                                      // 直接拖曳就能調順序
     const im = document.createElement('img');
     im.src = thumbOf(o.canvas);
     const sp = document.createElement('span');
@@ -904,18 +923,133 @@ $('lyrUp').addEventListener('click', () => moveLayer(edSel + 1));
 $('lyrDown').addEventListener('click', () => moveLayer(edSel - 1));
 $('lyrBottom').addEventListener('click', () => moveLayer(0));
 
-/* ===== 🎨 鋪底色：把整張背景填成一個顏色 ===== */
-$('edFillBg').addEventListener('click', () => {
-  const c = prompt('底色要什麼顏色？（色碼，例如 #fff6e5 米色、#eaf4ff 淺藍、#ffffff 純白）', '#fff6e5');
-  if (c === null) return;
-  const t = String(c).trim();
-  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(t)) { alert('請輸入 #ffffff 這種格式的色碼'); return; }
-  edPushUndo();
-  baseG.fillStyle = t;
-  baseG.fillRect(0, 0, baseC.width, baseC.height);
+/* ===== 圖層拖曳排序（像 Canva 那樣直接拉） =====
+   清單由上到下＝最上層到最下層，跟 edObjects 相反，所以搬完要反過來寫回去。 */
+let lyrDrag = null;
+const lyrBox = $('edLayerList');
+
+function clearLyrMarks() {
+  lyrBox.querySelectorAll('.drop-before, .drop-after')
+        .forEach(d => d.classList.remove('drop-before', 'drop-after'));
+}
+
+lyrBox.addEventListener('dragstart', e => {
+  const d = e.target.closest('.lyr[data-i]');
+  if (!d) { e.preventDefault(); return; }
+  lyrDrag = d;
+  d.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'layer');   // Firefox 需要有資料才拖得動
+});
+
+lyrBox.addEventListener('dragover', e => {
+  if (!lyrDrag) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  clearLyrMarks();
+  const over = e.target.closest('.lyr');
+  if (!over || over === lyrDrag) return;
+  if (!over.dataset.i) { over.classList.add('drop-before'); return; }   // 拖到「背景」上＝放到最下面
+  const r = over.getBoundingClientRect();
+  over.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+});
+
+lyrBox.addEventListener('drop', e => {
+  if (!lyrDrag) return;
+  e.preventDefault();
+  e.stopPropagation();                       // 不要讓「拖檔案進來加圖片」接手
+  const over = e.target.closest('.lyr');
+  if (over && over !== lyrDrag) {
+    if (!over.dataset.i) {
+      lyrBox.insertBefore(lyrDrag, over);     // 背景永遠在最後，插在它前面＝最下層
+    } else {
+      const r = over.getBoundingClientRect();
+      if (e.clientY < r.top + r.height / 2) lyrBox.insertBefore(lyrDrag, over);
+      else lyrBox.insertBefore(lyrDrag, over.nextSibling);
+    }
+    applyLayerDomOrder();
+  }
+  endLyrDrag();
+});
+
+lyrBox.addEventListener('dragend', endLyrDrag);
+
+function endLyrDrag() {
+  if (lyrDrag) lyrDrag.classList.remove('dragging');
+  clearLyrMarks();
+  lyrDrag = null;
+}
+
+/* 照現在畫面上的清單順序重排 edObjects（清單是反的，所以 reverse） */
+function applyLayerDomOrder() {
+  const keep = edSel >= 0 ? edObjects[edSel] : null;
+  const order = [...lyrBox.querySelectorAll('.lyr[data-i]')].map(d => edObjects[+d.dataset.i]);
+  if (order.length !== edObjects.length || order.some(o => !o)) { renderLayerList(); return; }
+  edObjects = order.reverse();
+  edSel = keep ? edObjects.indexOf(keep) : -1;
   edRedraw();
   renderLayerList();
-  $('edhint').textContent = '🎨 底色已鋪好。接著用「📋 貼上」或 Ctrl+V 把圖疊上去，右邊圖層清單可調整前後順序';
+}
+
+/* ===== 選色小面板：常用色點一下就好，要別的顏色再用調色盤 ===== */
+const CPICK_COLORS = [
+  ['#ffffff', '白'],     ['#fff6e5', '米色'],   ['#fff9db', '淡黃'],   ['#eaf4ff', '淺藍'],
+  ['#eaf7ee', '淺綠'],   ['#fdeaf1', '淺粉'],   ['#f3eefc', '淺紫'],   ['#f2f2f2', '淺灰'],
+];
+
+function pickColor(title, note, initial, cb) {
+  const mask = document.createElement('div');
+  mask.className = 'cpick-mask';
+  const box = document.createElement('div');
+  box.className = 'cpick';
+  const h = document.createElement('h3'); h.textContent = title;
+  const p = document.createElement('p'); p.textContent = note;
+  const grid = document.createElement('div'); grid.className = 'cpick-grid';
+  let chosen = initial;
+  const close = () => mask.remove();
+
+  CPICK_COLORS.forEach(([hex, name]) => {
+    const b = document.createElement('div');
+    b.className = 'cpick-sw';
+    b.style.background = hex;
+    b.title = name + ' ' + hex;
+    const sp = document.createElement('span'); sp.textContent = name;
+    b.appendChild(sp);
+    b.addEventListener('click', () => { close(); cb(hex); });   // 點常用色＝直接套用
+    grid.appendChild(b);
+  });
+
+  const row = document.createElement('div'); row.className = 'cpick-row';
+  const lab = document.createElement('span'); lab.textContent = '其他顏色：';
+  const inp = document.createElement('input'); inp.type = 'color'; inp.value = initial;
+  const shown = document.createElement('span'); shown.textContent = initial;
+  inp.addEventListener('input', () => { chosen = inp.value; shown.textContent = inp.value; });
+  row.appendChild(lab); row.appendChild(inp); row.appendChild(shown);
+
+  const btns = document.createElement('div'); btns.className = 'cpick-btns';
+  const no = document.createElement('button'); no.className = 'cpick-no'; no.textContent = '取消';
+  const ok = document.createElement('button'); ok.className = 'cpick-ok'; ok.textContent = '就用這個顏色';
+  no.addEventListener('click', close);
+  ok.addEventListener('click', () => { close(); cb(chosen); });
+  btns.appendChild(no); btns.appendChild(ok);
+
+  box.appendChild(h); box.appendChild(p); box.appendChild(grid);
+  box.appendChild(row); box.appendChild(btns);
+  mask.appendChild(box);
+  mask.addEventListener('click', e => { if (e.target === mask) close(); });
+  document.body.appendChild(mask);
+}
+
+/* ===== 🎨 鋪底色：把整張背景填成一個顏色 ===== */
+$('edFillBg').addEventListener('click', () => {
+  pickColor('鋪底色', '整張背景會填成這個顏色，按「↩ 復原」可以還原。', '#fff6e5', col => {
+    edPushUndo();
+    baseG.fillStyle = col;
+    baseG.fillRect(0, 0, baseC.width, baseC.height);
+    edRedraw();
+    renderLayerList();
+    $('edhint').textContent = '🎨 底色已鋪好。接著用「📋 貼上」或 Ctrl+V 把圖疊上去，右邊圖層清單可拖曳調整前後順序';
+  });
 });
 
 /* ===== 🪄 去背：把圖層四周的背景色洗成透明 =====
