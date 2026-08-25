@@ -1,11 +1,11 @@
 // Supabase Edge Function: ws-ai-edit
 // 局部 AI 修圖代理：網頁傳「原圖＋遮罩＋指令」，這裡帶著 API 金鑰去呼叫 OpenAI，回傳新圖。
 // 金鑰只存在 Supabase 的環境變數，永遠不會出現在網頁原始碼裡。
-// 只允許 vickychien127@gmail.com 使用。
+// 只允許名單內的帳號使用（Vicky＋教務共用帳號）。
 
 const OPENAI_KEY = Deno.env.get('OPENAI_API_KEY') ?? '';
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
-const ALLOWED_EMAIL = 'vickychien127@gmail.com';
+const ALLOWED_EMAILS = ['vickychien127@gmail.com', 'pas.english@gmail.com'];
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -43,7 +43,7 @@ Deno.serve(async (req) => {
   });
   if (!who.ok) return json({ error: '登入已過期，請重新登入' }, 401);
   const user = await who.json();
-  if (user?.email !== ALLOWED_EMAIL) return json({ error: '沒有使用權限' }, 403);
+  if (!ALLOWED_EMAILS.includes(user?.email)) return json({ error: '沒有使用權限' }, 403);
 
   // 2) 取出參數
   let body: { image?: string; mask?: string; prompt?: string; size?: string };
