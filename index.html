@@ -249,7 +249,27 @@
   #edbar label { display: flex; align-items: center; gap: 5px; }
   #edbar select { padding: 4px; border: none; border-radius: 4px; }
   #edhint { font-size: 12px; color: #ffd; }
+  #edbody { flex: 1; display: flex; min-height: 0; }
   #edwrap { flex: 1; overflow: auto; text-align: center; padding: 16px; }
+  #edlayers {
+    width: 208px; flex: none; background: #26333f; color: #fff;
+    display: flex; flex-direction: column; border-left: 2px solid #1b2530;
+  }
+  #edlayers h4 { margin: 0; padding: 10px 12px; font-size: 13px; background: #1f2b35; }
+  #edLayerList { flex: 1; overflow-y: auto; padding: 6px; }
+  .lyr {
+    display: flex; align-items: center; gap: 8px; padding: 6px;
+    border-radius: 6px; cursor: pointer; margin-bottom: 4px; background: #32424f;
+  }
+  .lyr:hover { background: #3d5162; }
+  .lyr.on { background: #e67e22; }
+  .lyr img { width: 40px; height: 40px; object-fit: contain; background: #fff; border-radius: 4px; flex: none; }
+  .lyr .lname { font-size: 12px; line-height: 1.3; overflow: hidden; word-break: break-all; }
+  .lyr.bg { background: #46617c; cursor: default; }
+  .lyr.bg:hover { background: #46617c; }
+  #edLayerBtns { padding: 8px; border-top: 2px solid #1b2530; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  #edLayerBtns button { padding: 7px 4px; font-size: 13px; }
+  #edLayerTip { font-size: 11px; color: #9fb4c7; padding: 0 8px 8px; line-height: 1.5; }
   #edcanvas { background: #fff; cursor: crosshair; touch-action: none; box-shadow: 0 0 20px rgba(0,0,0,.5); }
 
   @media print {
@@ -272,6 +292,7 @@
 <div id="topbar">
   <button id="btnMenu" title="顯示／隱藏設定欄">☰</button>
   <button id="btnAdd" style="background:#27ae60">＋ 加入圖片</button>
+  <button id="btnBlank" style="background:#27ae60">＋ 空白頁</button>
   <input type="file" id="fileInput" accept="image/*" multiple hidden>
   <button id="btnDownload" style="background:#2980b9">⬇ 下載 PDF</button>
   <button id="btnPrint" style="background:#e67e22">🖨 列印</button>
@@ -449,6 +470,7 @@
     <button data-tool="rect">▭ 方塊遮蓋</button>
     <button data-tool="pick">🎯 吸取顏色</button>
     <button data-tool="erase">🧽 橡皮擦</button>
+    <button id="edFillBg">🎨 鋪底色</button>
     <button data-tool="copy">✂ 選取複製</button>
     <button data-tool="cut">✄ 剪下</button>
     <button data-tool="line">╱ 直線</button>
@@ -479,7 +501,20 @@
     <button id="edcancel">✕ 取消</button>
     <span id="edhint">筆刷/方塊蓋掉不要的字；背景非白色先「吸取顏色」。✂複製或✄剪下後按「📋 貼上」＝新增圖層，可拖曳、拉角縮放；圖層選起來按「🪄 去背」就能去掉白底。外面複製的圖直接 Ctrl+V 也能貼進來。按「✅ 完成」才合併存檔</span>
   </div>
-  <div id="edwrap"><canvas id="edcanvas"></canvas></div>
+  <div id="edbody">
+    <div id="edwrap"><canvas id="edcanvas"></canvas></div>
+    <div id="edlayers">
+      <h4>🗂 圖層（上面的蓋住下面的）</h4>
+      <div id="edLayerList"></div>
+      <div id="edLayerBtns">
+        <button id="lyrTop">⏫ 移到最上</button>
+        <button id="lyrUp">⬆ 上移一層</button>
+        <button id="lyrDown">⬇ 下移一層</button>
+        <button id="lyrBottom">⏬ 移到最下</button>
+      </div>
+      <div id="edLayerTip">點清單選圖層，也可以直接在圖上點。背景那一層是底圖，筆刷、遮蓋、標註都畫在它上面。</div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -497,6 +532,25 @@ $('btnMenu').addEventListener('click', () => {
 try { if (localStorage.getItem('ws_panel_hidden')) document.body.classList.add('panel-hidden'); } catch (e) {}
 
 $('btnAdd').addEventListener('click', () => fileInput.click());
+
+/* ＋ 空白頁：做一張純色的頁面，可以從零開始鋪底色、疊圖 */
+$('btnBlank').addEventListener('click', () => {
+  const c = prompt('空白頁要什麼底色？（色碼，例如 #ffffff 白、#fff6e5 米色、#eaf4ff 淺藍）', '#ffffff');
+  if (c === null) return;
+  const t = String(c).trim();
+  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(t)) { alert('請輸入 #ffffff 這種格式的色碼'); return; }
+  const cv = document.createElement('canvas');
+  cv.width = 2480; cv.height = 3508;            // A4 300dpi
+  const g = cv.getContext('2d');
+  g.fillStyle = t;
+  g.fillRect(0, 0, cv.width, cv.height);
+  cv.toBlob(b => {
+    if (!b) return;
+    addBlob(b);
+    refresh();
+    setSaveInfo('已加入一張空白頁 — 點該頁的 ✏️ 就能鋪底色、貼圖、排圖層');
+  }, 'image/jpeg', 0.97);
+});
 $('btnPrint').addEventListener('click', () => {
   try { window.print(); }
   catch (e) { $('btnPrint').textContent = '列印被瀏覽器擋住，請用下載 PDF'; }
@@ -670,7 +724,7 @@ function openEditor(sheet) {
   eraseTmp.width = baseC.width; eraseTmp.height = baseC.height;
   edCanvas.width = baseC.width; edCanvas.height = baseC.height;
   edCtx = edCanvas.getContext('2d');
-  edUndo = []; edObjects = []; edSel = -1; edAction = null;
+  edUndo = []; edObjects = []; edSel = -1; edAction = null; edLayerNo = 0;
   edColor = '#ffffff';
   $('edswatch').style.background = edColor;
   $('edzoom').value = 'fit';
@@ -679,6 +733,7 @@ function openEditor(sheet) {
   $('editor').hidden = false;
   edSetZoom();
   edRedraw();
+  renderLayerList();
 }
 
 function setEdTool(t) {
@@ -732,11 +787,136 @@ function edRedraw() {
       }
     }
   });
+  syncLayerSel();
   $('eddelete').disabled = edSel < 0;
   const canCut = edSel >= 0 && !edObjects[edSel].isText;
   $('edCutout').disabled = !canCut;
   $('edTolWrap').style.display = (canCut && edObjects[edSel].cutTol != null) ? 'flex' : 'none';
 }
+
+/* ===== 🗂 圖層面板：清單由上到下＝從最上層到最下層 ===== */
+let edLayerNo = 0;                                  // 圖層編號：建立時給，調順序不會變
+function nextLayerNo() { return ++edLayerNo; }
+function layerName(o) {
+  if (o.isBg) return '原本的底圖';
+  if (o.isText) return '文字：' + String(o.text).slice(0, 12).replace(/\n/g, ' ');
+  return '圖片 ' + (o.no || '?') + (o.cutTol > 0 ? '（已去背）' : '');
+}
+
+function thumbOf(canvas) {
+  const t = document.createElement('canvas');
+  const k = Math.min(40 / canvas.width, 40 / canvas.height, 1);
+  t.width = Math.max(1, Math.round(canvas.width * k));
+  t.height = Math.max(1, Math.round(canvas.height * k));
+  t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
+  return t.toDataURL();
+}
+
+function renderLayerList() {
+  const box = $('edLayerList');
+  if (!box) return;
+  box.innerHTML = '';
+  for (let i = edObjects.length - 1; i >= 0; i--) {          // 反過來列：最上層排最前
+    const o = edObjects[i];
+    const d = document.createElement('div');
+    d.className = 'lyr' + (i === edSel ? ' on' : '');
+    d.dataset.i = i;
+    const im = document.createElement('img');
+    im.src = thumbOf(o.canvas);
+    const sp = document.createElement('span');
+    sp.className = 'lname';
+    sp.textContent = layerName(o);
+    d.appendChild(im); d.appendChild(sp);
+    box.appendChild(d);
+  }
+  const bg = document.createElement('div');
+  bg.className = 'lyr bg';
+  const bim = document.createElement('img');
+  if (baseC) bim.src = thumbOf(baseC);
+  const bsp = document.createElement('span');
+  bsp.className = 'lname';
+  bsp.textContent = '背景（底圖）';
+  bg.appendChild(bim); bg.appendChild(bsp);
+  if (baseC) {
+    const tl = document.createElement('button');
+    tl.id = 'bgToLayer';
+    tl.textContent = '⤴ 轉成圖層';
+    tl.title = '把背景變成一個可移動的圖層，這樣別的圖就能疊到它下面';
+    tl.style.cssText = 'margin-left:auto;padding:4px 6px;font-size:11px;border:none;border-radius:4px;background:#2c3e50;color:#fff;cursor:pointer';
+    bg.appendChild(tl);
+  }
+  box.appendChild(bg);
+  syncLayerBtns();
+}
+
+function syncLayerSel() {
+  const box = $('edLayerList');
+  if (!box) return;
+  box.querySelectorAll('.lyr[data-i]').forEach(d => {
+    d.classList.toggle('on', +d.dataset.i === edSel);
+  });
+  syncLayerBtns();
+}
+
+function syncLayerBtns() {
+  const has = edSel >= 0;
+  const top = edObjects.length - 1;
+  $('lyrTop').disabled = !has || edSel === top;
+  $('lyrUp').disabled = !has || edSel === top;
+  $('lyrDown').disabled = !has || edSel === 0;
+  $('lyrBottom').disabled = !has || edSel === 0;
+}
+
+$('edLayerList').addEventListener('click', e => {
+  if (e.target.id === 'bgToLayer') {           // 背景 → 最底層的圖層，之後可任意調順序
+    const c = document.createElement('canvas');
+    c.width = baseC.width; c.height = baseC.height;
+    c.getContext('2d').drawImage(baseC, 0, 0);
+    edPushUndo();
+    edObjects.unshift({ canvas: c, no: nextLayerNo(), isBg: true, x: 0, y: 0, w: baseC.width, h: baseC.height });
+    if (edSel >= 0) edSel++;                   // 全部往上推一格
+    baseG.fillStyle = '#ffffff';
+    baseG.fillRect(0, 0, baseC.width, baseC.height);
+    edRedraw();
+    renderLayerList();
+    $('edhint').textContent = '⤴ 原本的底圖已變成最下面那一層，現在可以把別的圖移到它下面了（背景已改成白色）';
+    return;
+  }
+  const d = e.target.closest('.lyr[data-i]');
+  if (!d) return;
+  edSel = +d.dataset.i;
+  edRedraw();
+  renderLayerList();
+});
+
+/* 調整層序：陣列後面＝畫在上面 */
+function moveLayer(to) {
+  if (edSel < 0) return;
+  const o = edObjects.splice(edSel, 1)[0];
+  const n = Math.max(0, Math.min(edObjects.length, to));
+  edObjects.splice(n, 0, o);
+  edSel = n;
+  edRedraw();
+  renderLayerList();
+}
+$('lyrTop').addEventListener('click', () => moveLayer(edObjects.length - 1));
+$('lyrUp').addEventListener('click', () => moveLayer(edSel + 1));
+$('lyrDown').addEventListener('click', () => moveLayer(edSel - 1));
+$('lyrBottom').addEventListener('click', () => moveLayer(0));
+
+/* ===== 🎨 鋪底色：把整張背景填成一個顏色 ===== */
+$('edFillBg').addEventListener('click', () => {
+  const c = prompt('底色要什麼顏色？（色碼，例如 #fff6e5 米色、#eaf4ff 淺藍、#ffffff 純白）', '#fff6e5');
+  if (c === null) return;
+  const t = String(c).trim();
+  if (!/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(t)) { alert('請輸入 #ffffff 這種格式的色碼'); return; }
+  edPushUndo();
+  baseG.fillStyle = t;
+  baseG.fillRect(0, 0, baseC.width, baseC.height);
+  edRedraw();
+  renderLayerList();
+  $('edhint').textContent = '🎨 底色已鋪好。接著用「📋 貼上」或 Ctrl+V 把圖疊上去，右邊圖層清單可調整前後順序';
+});
 
 /* ===== 🪄 去背：把圖層四周的背景色洗成透明 =====
    從四個邊往內擴散（連通判斷），所以圖中間的白色（例如字的內孔）不會被誤挖。 */
@@ -801,6 +981,7 @@ function applyCutout(tol) {
   o.cutTol = tol;
   o.canvas = makeCutout(o.origCanvas, tol);
   edRedraw();
+  renderLayerList();
 }
 
 $('edCutout').addEventListener('click', () => {
@@ -965,6 +1146,7 @@ function addTextLayer(text, opt, at) {
   edObjects.push({ canvas: c, x, y, w: c.width, h: c.height, isText: true, text, opt: o });
   edSel = edObjects.length - 1;
   edRedraw();
+  renderLayerList();
 }
 
 $('edAddText').addEventListener('click', () => {
@@ -987,7 +1169,7 @@ edCanvas.addEventListener('dblclick', e => {
       const c = makeTextCanvas(t, o.opt);
       o.canvas = c; o.text = t;
       o.w = c.width * scale; o.h = c.height * scale;
-      edSel = i; edRedraw();
+      edSel = i; edRedraw(); renderLayerList();
       return;
     }
   }
@@ -1002,12 +1184,13 @@ $('edpaste').addEventListener('click', () => {
   const c = document.createElement('canvas');   // 每一層各自一份，去背才不會互相影響
   c.width = clipPatch.canvas.width; c.height = clipPatch.canvas.height;
   c.getContext('2d').drawImage(clipPatch.canvas, 0, 0);
-  edObjects.push({ canvas: c,
+  edObjects.push({ canvas: c, no: nextLayerNo(),
                    x: (edCanvas.width - w) / 2 + off,
                    y: (edCanvas.height - h) / 2 + off, w, h });
   edSel = edObjects.length - 1;
   edRedraw();
-  $('edhint').textContent = '✔ 已貼上：拖曳移動、拉四角縮放；要去掉白底就按「🪄 去背」';
+  renderLayerList();
+  $('edhint').textContent = '✔ 已貼上：拖曳移動、拉四角縮放；要去掉白底就按「🪄 去背」。右邊圖層清單可調前後順序';
 });
 
 /* 外面複製的圖（網頁、截圖、其他軟體）直接 Ctrl+V 貼進來成為一個圖層 */
@@ -1028,12 +1211,13 @@ window.addEventListener('paste', ev => {
       URL.revokeObjectURL(url);
       const k = Math.min(1, edCanvas.width * 0.5 / c.width);   // 太大就縮到半頁寬
       const off = (edObjects.length % 8) * handleSize();
-      edObjects.push({ canvas: c,
+      edObjects.push({ canvas: c, no: nextLayerNo(),
                        x: (edCanvas.width - c.width * k) / 2 + off,
                        y: (edCanvas.height - c.height * k) / 2 + off,
                        w: c.width * k, h: c.height * k });
       edSel = edObjects.length - 1;
       edRedraw();
+      renderLayerList();
       $('edhint').textContent = '✔ 已從剪貼簿貼上：拖曳移動、拉四角縮放；要去掉白底就按「🪄 去背」';
     };
     im.onerror = () => { URL.revokeObjectURL(url); alert('這張圖讀不進來'); };
@@ -1046,6 +1230,7 @@ $('eddelete').addEventListener('click', () => {
   edObjects.splice(edSel, 1);
   edSel = -1;
   edRedraw();
+  renderLayerList();
 });
 
 /* ===== 雲端儲存（Supabase Storage，私人空間 ws-projects） =====
