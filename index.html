@@ -315,6 +315,8 @@
   <button id="btnBlank" style="background:#27ae60">＋ 空白頁</button>
   <input type="file" id="fileInput" accept="image/*" multiple hidden>
   <button id="btnDownload" style="background:#2980b9">⬇ 下載 PDF</button>
+  <button id="btnDownloadImg" style="background:#8e44ad">⬇ 下載圖檔</button>
+  <select id="imgFmt" title="圖檔格式" style="height:30px;border-radius:6px;border:1px solid #bbb;font-size:13px"><option value="jpg">JPG（檔案小）</option><option value="png">PNG（最清晰）</option></select>
   <button id="btnPrint" style="background:#e67e22">🖨 列印</button>
   <button id="btnCloudSave" style="background:#2c81ba">☁️⬆ 存到雲端</button>
   <button id="btnCloudMgr" style="background:#34495e">🗂 雲端管理</button>
@@ -575,6 +577,7 @@ $('btnPrint').addEventListener('click', () => {
   catch (e) { $('btnPrint').textContent = '列印被瀏覽器擋住，請用下載 PDF'; }
 });
 $('btnDownload').addEventListener('click', downloadPdf);
+$('btnDownloadImg').addEventListener('click', downloadImages);
 
 /* 清空：按兩次確認，不用彈出視窗（沙盒環境也能用） */
 let clearArmed = null;
@@ -2744,7 +2747,7 @@ function drawFooterAndPn(g, o, i, num, W, H) {
   }
 }
 
-function renderSheetToJpeg(sheet, i, num, o, W, H) {
+function renderSheetToJpeg(sheet, i, num, o, W, H, mime, q) {
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
@@ -2768,10 +2771,10 @@ function renderSheetToJpeg(sheet, i, num, o, W, H) {
   g.restore();
 
   drawFooterAndPn(g, o, i, num, W, H);
-  return c.toDataURL('image/jpeg', 0.94);
+  return c.toDataURL(mime || 'image/jpeg', q === undefined ? 0.94 : q);
 }
 
-function renderTocToJpeg(i, contentCount, o, W, H) {
+function renderTocToJpeg(i, contentCount, o, W, H, mime, q) {
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
@@ -2817,7 +2820,7 @@ function renderTocToJpeg(i, contentCount, o, W, H) {
   }
 
   drawFooterAndPn(g, o, i, null, W, H);
-  return c.toDataURL('image/jpeg', 0.94);
+  return c.toDataURL(mime || 'image/jpeg', q === undefined ? 0.94 : q);
 }
 
 function dataUrlToBytes(u) {
@@ -3024,8 +3027,8 @@ async function savePdfOnline() {
 /* 線上版（claude.ai）：平台僅允許經官方通道存圖片，逐頁存成 JPG。
    平台對確認視窗有限速：遇到限速自動等待重試；中斷後再按一次從斷點續存 */
 let dlQueue = null;
-async function downloadImagesViaClaude() {
-  const btn = $('btnDownload');
+async function downloadImagesViaClaude(btnEl) {
+  const btn = btnEl || $('btnDownload');
   if (!dlQueue) {
     const all = [...pages.querySelectorAll('.sheet')];
     const o = getOpts();
@@ -3080,6 +3083,138 @@ async function downloadImagesViaClaude() {
   }
   btn.textContent = '✅ ' + q.items.length + ' 頁全部已儲存';
   dlQueue = null;
+}
+
+
+/* ===== 下載圖檔（一頁＝一張圖；多頁自動打包成 ZIP） ===== */
+const IMG_BASE = 'A4學習單';
+
+/* 把目前所有頁面畫成圖片，與 PDF 用同一套繪製流程，所以裝訂邊、頁碼、頁尾都會一樣 */
+function renderAllPageImages(mime, q, ext) {
+  const all = [...pages.querySelectorAll('.sheet')];
+  const o = getOpts();
+  const W = cm2px(21), H = cm2px(29.7);
+  const imgCount = all.filter(s => !s.classList.contains('toc')).length;
+  const contentCount = Math.max(0, imgCount - (o.coverFirst ? 1 : 0));
+  let num = o.start;
+  return all.map((s, i) => {
+    let dataUrl;
+    if (s.classList.contains('toc')) {
+      dataUrl = renderTocToJpeg(i, contentCount, o, W, H, mime, q);
+    } else {
+      const isCover = o.coverFirst && i === 0;
+      const n = (!o.showPn || isCover) ? null : num++;
+      dataUrl = renderSheetToJpeg(s, i, n, o, W, H, mime, q);
+    }
+    return { name: IMG_BASE + '-' + String(i + 1).padStart(2, '0') + '.' + ext,
+             bytes: dataUrlToBytes(dataUrl) };
+  });
+}
+
+/* 純前端 ZIP（store 模式，不壓縮）：JPG/PNG 本來就壓過了，再壓也省不了多少 */
+const CRC_TBL = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TBL[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function makeZip(files) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  const d = new Date();
+  const dosTime = ((d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1)) & 0xFFFF;
+  const dosDate = (((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate()) & 0xFFFF;
+  const u16 = (v, a, i) => { a[i] = v & 0xFF; a[i + 1] = (v >>> 8) & 0xFF; };
+  const u32 = (v, a, i) => { a[i] = v & 0xFF; a[i + 1] = (v >>> 8) & 0xFF; a[i + 2] = (v >>> 16) & 0xFF; a[i + 3] = (v >>> 24) & 0xFF; };
+
+  files.forEach(f => {
+    const nameBytes = enc.encode(f.name);          // 檔名用 UTF-8，下面旗標第 11 位設 1
+    const crc = crc32(f.bytes);
+    const lh = new Uint8Array(30 + nameBytes.length);
+    u32(0x04034b50, lh, 0); u16(20, lh, 4); u16(0x0800, lh, 6); u16(0, lh, 8);
+    u16(dosTime, lh, 10); u16(dosDate, lh, 12);
+    u32(crc, lh, 14); u32(f.bytes.length, lh, 18); u32(f.bytes.length, lh, 22);
+    u16(nameBytes.length, lh, 26); u16(0, lh, 28);
+    lh.set(nameBytes, 30);
+    parts.push(lh, f.bytes);
+
+    const ch = new Uint8Array(46 + nameBytes.length);
+    u32(0x02014b50, ch, 0); u16(20, ch, 4); u16(20, ch, 6); u16(0x0800, ch, 8); u16(0, ch, 10);
+    u16(dosTime, ch, 12); u16(dosDate, ch, 14);
+    u32(crc, ch, 16); u32(f.bytes.length, ch, 20); u32(f.bytes.length, ch, 24);
+    u16(nameBytes.length, ch, 28); u16(0, ch, 30); u16(0, ch, 32);
+    u16(0, ch, 34); u16(0, ch, 36); u32(0, ch, 38); u32(offset, ch, 42);
+    ch.set(nameBytes, 46);
+    central.push(ch);
+
+    offset += lh.length + f.bytes.length;
+  });
+
+  const cdSize = central.reduce((n, c) => n + c.length, 0);
+  const eocd = new Uint8Array(22);
+  u32(0x06054b50, eocd, 0); u16(0, eocd, 4); u16(0, eocd, 6);
+  u16(files.length, eocd, 8); u16(files.length, eocd, 10);
+  u32(cdSize, eocd, 12); u32(offset, eocd, 16); u16(0, eocd, 20);
+
+  return new Blob([...parts, ...central, eocd], { type: 'application/zip' });
+}
+
+function saveBlob(blob, filename, hintKB) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  const ml = $('manualDl');
+  ml.href = url; ml.download = filename; ml.target = '_blank';
+  ml.textContent = '沒有自動下載嗎？點這裡儲存 ' + filename + '（' + hintKB + '）';
+  $('dlrow').style.display = '';
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+}
+
+function downloadImages() {
+  const btn = $('btnDownloadImg');
+  if (!pages.querySelector('.sheet')) {
+    btn.textContent = '請先加入圖片';
+    setTimeout(() => { btn.textContent = '⬇ 下載圖檔'; }, 2000);
+    return;
+  }
+  const png = $('imgFmt').value === 'png';
+  const mime = png ? 'image/png' : 'image/jpeg';
+  const ext  = png ? 'png' : 'jpg';
+
+  if (window.claude && window.claude.downloads) {   // 沙盒環境只能逐頁存
+    btn.disabled = true;
+    downloadImagesViaClaude(btn).finally(() => { setTimeout(() => { btn.disabled = false; }, 1500); });
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = '製作中…';
+  try {
+    const files = renderAllPageImages(mime, png ? undefined : 0.94, ext);
+    if (files.length === 1) {
+      const blob = new Blob([files[0].bytes], { type: mime });
+      saveBlob(blob, IMG_BASE + '.' + ext, Math.round(blob.size / 1024) + ' KB');
+      btn.textContent = '✅ 圖檔已下載';
+    } else {
+      const zip = makeZip(files);
+      const mb = (zip.size / 1048576).toFixed(1);
+      saveBlob(zip, IMG_BASE + '_' + files.length + '頁_' + ext.toUpperCase() + '.zip', mb + ' MB');
+      btn.textContent = '✅ ' + files.length + ' 張已打包下載';
+    }
+  } catch (err) {
+    btn.textContent = '下載失敗：' + err.message;
+  }
+  setTimeout(() => { btn.textContent = '⬇ 下載圖檔'; btn.disabled = false; }, 3000);
 }
 
 let lastPdfUrl = null;
