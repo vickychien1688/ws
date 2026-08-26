@@ -156,14 +156,28 @@
 
   /* 螢幕上每頁的小工具列 */
   .toolbar {
-    position: absolute; top: 6px; right: 6px; z-index: 5;
-    display: flex; gap: 4px; opacity: 0; transition: opacity .15s;
+    position: absolute; top: 8px; right: 8px; z-index: 5;
+    display: flex; gap: 6px; align-items: center;
+    /* 頁面縮到 66% 時按鈕不要跟著縮小，一律維持看得清楚的大小 */
+    transform: scale(calc(1 / max(var(--z, 1), .4)));
+    transform-origin: top right;
   }
-  .sheet:hover .toolbar { opacity: 1; }
+  /* 「修圖」一直看得到（平板沒有滑鼠移過去這件事），其他按鈕滑過去才出現 */
+  .toolbar > *:not(.edit) { opacity: 0; transition: opacity .15s; }
+  .sheet:hover .toolbar > * { opacity: 1; }
   .toolbar button {
-    width: 30px; height: 30px; border: none; border-radius: 4px;
-    background: rgba(44,62,80,.85); color: #fff; cursor: pointer; font-size: 15px;
+    width: 42px; height: 42px; border: none; border-radius: 8px;
+    background: rgba(44,62,80,.88); color: #fff; cursor: pointer; font-size: 21px;
+    line-height: 1; display: flex; align-items: center; justify-content: center;
   }
+  .toolbar button:hover { background: rgba(44,62,80,1); }
+  .toolbar button.edit {
+    width: auto; padding: 0 18px; height: 46px; gap: 7px;
+    font-size: 19px; font-weight: bold; background: #8e44ad;
+    box-shadow: 0 3px 10px rgba(0,0,0,.35); opacity: .93;
+  }
+  .toolbar button.edit:hover { background: #9b59b6; opacity: 1; }
+  .toolbar button[data-act="del"]:hover { background: #c0392b; }
   .bindline { /* 螢幕上顯示裝訂邊界線，列印不顯示 */
     position: absolute; top: 0; bottom: 0; left: var(--bind);
     border-left: 1px dashed #b6c3d1; pointer-events: none;
@@ -174,8 +188,8 @@
 
   /* 拖曳排序 */
   .drag-handle {
-    width: 30px; height: 30px; border-radius: 4px;
-    background: rgba(44,62,80,.85); color: #fff; font-size: 15px;
+    width: 42px; height: 42px; border-radius: 8px;
+    background: rgba(44,62,80,.88); color: #fff; font-size: 20px;
     display: flex; align-items: center; justify-content: center;
     cursor: grab; user-select: none;
   }
@@ -486,7 +500,7 @@
 
 <div id="main">
 <div id="hint">
-  💡 每頁右上角可 ✏️ 修圖、✕ 刪除；<b>按住 ✥ 把手拖曳可調整順序，⤒ 移到最前、🔢 直接輸入要移到第幾張、⤓ 移到最後</b>。目錄頁標題直接點擊就能輸入。
+  💡 每頁右上角有紫色的 <b>✏️ 修圖</b> 鈕（滑鼠移到該頁還會出現 ✕ 刪除與排序鈕）；<b>按住 ✥ 把手拖曳可調整順序，⤒ 移到最前、🔢 直接輸入要移到第幾張、⤓ 移到最後</b>。目錄頁標題直接點擊就能輸入。
   <br>📐 <b id="areaInfo"></b>
   <br>💾 <b id="saveInfo">自動暫存準備中…</b>
   <span id="dlrow" style="display:none"><br>📄 <a id="manualDl" style="color:#b03;font-weight:bold"></a></span>
@@ -666,7 +680,7 @@ function addBlob(blob) {
       <button data-act="first" title="一鍵移到最前面">⤒</button>
       <button data-act="goto" title="移到第幾張（輸入數字）">🔢</button>
       <button data-act="last" title="一鍵移到最後面">⤓</button>
-      <button data-act="edit" title="修圖（蓋掉不要的字）">✏️</button>
+      <button data-act="edit" class="edit" title="修圖：蓋掉不要的字、抓標題、加文字">✏️ 修圖</button>
       <button data-act="del" title="刪除">✕</button>
     </div>`;
   pages.appendChild(sheet);
@@ -3028,6 +3042,7 @@ function applyViewZoom() {
   }
   $('zoomVal').textContent = Math.round(z * 100) + '%';
   pages.style.zoom = z;
+  pages.style.setProperty('--z', z);
 }
 window.addEventListener('resize', applyViewZoom);
 $('zoomSlider').addEventListener('input', () => {   // 拉滑桿＝切到自訂比例
