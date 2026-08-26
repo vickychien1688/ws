@@ -3107,8 +3107,62 @@ function renderAllPageImages(mime, q, ext) {
       dataUrl = renderSheetToJpeg(s, i, n, o, W, H, mime, q);
     }
     return { name: IMG_BASE + '-' + String(i + 1).padStart(2, '0') + '.' + ext,
-             bytes: dataUrlToBytes(dataUrl) };
+             bytes: stampDpi(dataUrlToBytes(dataUrl), ext === 'png') };
   });
+}
+
+/* 瀏覽器產生的圖檔一律標成 72dpi，會害 Word／Photoshop 以為圖有 34 吋寬。
+   像素本來就是 A4 300dpi 的 2480x3508，這裡只是把「300dpi」寫進檔案的標籤裡。 */
+const IMG_DPI = 300;
+
+function jpegSetDpi(bytes, dpi) {
+  // 標準 JFIF APP0：FFD8 FFE0 len 'JFIF\0' ver ver units Xden Yden
+  if (bytes[2] === 0xFF && bytes[3] === 0xE0 &&
+      bytes[6] === 0x4A && bytes[7] === 0x46 && bytes[8] === 0x49 && bytes[9] === 0x46) {
+    bytes[13] = 1;                                   // 單位＝每英吋
+    bytes[14] = dpi >> 8; bytes[15] = dpi & 0xFF;    // 橫向
+    bytes[16] = dpi >> 8; bytes[17] = dpi & 0xFF;    // 縱向
+    return bytes;
+  }
+  // 沒有 JFIF 段就自己插一段進去
+  const app0 = new Uint8Array([0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00,
+                               0x01, 0x01, 0x01, dpi >> 8, dpi & 0xFF, dpi >> 8, dpi & 0xFF, 0x00, 0x00]);
+  const out = new Uint8Array(bytes.length + app0.length);
+  out.set(bytes.slice(0, 2), 0);
+  out.set(app0, 2);
+  out.set(bytes.slice(2), 2 + app0.length);
+  return out;
+}
+
+function pngSetDpi(bytes, dpi) {
+  const ppm = Math.round(dpi / 0.0254);              // PNG 記的是「每公尺幾個像素」
+  const chunk = new Uint8Array(21);
+  const dv = new DataView(chunk.buffer);
+  dv.setUint32(0, 9);                                 // 資料長度
+  chunk.set([0x70, 0x48, 0x59, 0x73], 4);             // 'pHYs'
+  dv.setUint32(8, ppm); dv.setUint32(12, ppm);
+  chunk[16] = 1;                                      // 單位＝公尺
+  dv.setUint32(17, crc32(chunk.slice(4, 17)));
+
+  const d = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let p = 8, cut = 0;                                 // 略過 PNG 檔頭
+  while (p + 8 <= bytes.length) {
+    const len = d.getUint32(p);
+    const type = String.fromCharCode(bytes[p + 4], bytes[p + 5], bytes[p + 6], bytes[p + 7]);
+    if (type === 'pHYs') { cut = 12 + len; break; }   // 已經有就換掉
+    if (type === 'IDAT' || type === 'IEND') break;    // 沒有就插在影像資料前面
+    p += 12 + len;
+  }
+  const out = new Uint8Array(bytes.length - cut + chunk.length);
+  out.set(bytes.slice(0, p), 0);
+  out.set(chunk, p);
+  out.set(bytes.slice(p + cut), p + chunk.length);
+  return out;
+}
+
+function stampDpi(bytes, isPng) {
+  try { return isPng ? pngSetDpi(bytes, IMG_DPI) : jpegSetDpi(bytes, IMG_DPI); }
+  catch (e) { return bytes; }                         // 標籤寫不進去也不該擋住下載
 }
 
 /* 純前端 ZIP（store 模式，不壓縮）：JPG/PNG 本來就壓過了，再壓也省不了多少 */
