@@ -249,6 +249,27 @@
   #edbar label { display: flex; align-items: center; gap: 5px; }
   #edbar select { padding: 4px; border: none; border-radius: 4px; }
   #edhint { font-size: 12px; color: #ffd; }
+  #edQuick {
+    position: fixed; z-index: 120; display: none;
+    background: #2c3e50; border: 2px solid #16212b; border-radius: 9px;
+    padding: 5px 7px; gap: 6px; align-items: center;
+    box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  }
+  #edQuick button {
+    padding: 5px 10px; border: none; border-radius: 5px; cursor: pointer;
+    font-size: 13px; font-weight: bold; background: #46617c; color: #fff;
+  }
+  #edQuick button:hover { background: #5d7c9b; }
+  #edQuick button:disabled { opacity: .4; cursor: default; }
+  #edQuick #qDel { background: #c0392b; }
+  #edQuick label { color: #fff; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+  #edQuick .sep { width: 1px; height: 22px; background: #46617c; }
+  #edTxtEdit {
+    position: fixed; z-index: 130; display: none; margin: 0;
+    background: rgba(255,255,255,.9); border: 2px dashed #1a73e8; border-radius: 5px;
+    padding: 2px 6px; resize: none; overflow: hidden; outline: none;
+    line-height: 1.25; text-align: center; white-space: pre;
+  }
   #edbody { flex: 1; display: flex; min-height: 0; }
   #edwrap { flex: 1; overflow: auto; text-align: center; padding: 16px; }
   #edlayers {
@@ -488,7 +509,8 @@
 
 <div id="editor" hidden>
   <div id="edbar">
-    <button data-tool="brush" class="tsel">🖌 筆刷塗抹</button>
+    <button data-tool="pointer" class="tsel">↖ 選取移動</button>
+    <button data-tool="brush">🖌 筆刷塗抹</button>
     <button data-tool="rect">▭ 方塊遮蓋</button>
     <button data-tool="pick">🎯 吸取顏色</button>
     <button data-tool="erase">🧽 橡皮擦</button>
@@ -525,10 +547,21 @@
       </select>
     </label>
     <button id="edundo">↩ 復原</button>
+    <button id="edredo">↪ 重做</button>
     <button id="edok">✅ 完成</button>
     <button id="edcancel">✕ 取消</button>
-    <span id="edhint">要挑東西不用一格一格框：「🪄 點一下抓內容」點在標題上就整條抓起來，「🖍 塗抹選取」用筆刷塗過想要的地方；抓到的會變成圖層，可拖曳、拉角縮放、刪掉。筆刷/方塊蓋掉不要的字；背景非白色先「吸取顏色」。✂複製或✄剪下後按「📋 貼上」＝新增圖層，可拖曳、拉角縮放；圖層選起來按「🪄 去背」就能去掉白底。外面複製的圖直接 Ctrl+V 也能貼進來。按「✅ 完成」才合併存檔</span>
+    <span id="edhint">選東西：🪄 點一下抓內容（點標題就整條抓起來）、🖍 塗抹選取（筆刷塗到哪選到哪）。選到後可拖曳、拉八個把手縮放、上面圓點轉角度，靠近中線會自動對齊。鍵盤：Delete 刪除、方向鍵微調、Ctrl+Z 復原、Ctrl+Shift+Z 重做、Ctrl+D 複製一份。要蓋掉不要的字用 🖌 筆刷或 ▭ 方塊（紙張不是白色先按「吸取顏色」）。按「✅ 完成」才合併存檔</span>
   </div>
+  <div id="edQuick">
+    <button id="qDup">⧉ 複製一份</button>
+    <button id="qUp">⬆ 上移</button>
+    <button id="qDown">⬇ 下移</button>
+    <button id="qCut">🪄 去背</button>
+    <label>透明 <input type="range" id="qAlpha" min="15" max="100" value="100" style="width:72px"></label>
+    <span class="sep"></span>
+    <button id="qDel">🗑 刪除</button>
+  </div>
+  <textarea id="edTxtEdit" spellcheck="false"></textarea>
   <div id="edbody">
     <div id="edwrap"><canvas id="edcanvas"></canvas></div>
     <div id="edlayers">
@@ -729,10 +762,11 @@ function endDrag() {
 }
 
 /* ===== 簡單修圖（Canva 式：貼上的內容是可隨時點選、拖曳、縮放的圖層） ===== */
-let edSheet = null, edCtx = null, edUndo = [], edTool = 'brush', edColor = '#ffffff';
+let edSheet = null, edCtx = null, edUndo = [], edTool = 'pointer', edColor = '#ffffff';
 let edDrawing = false, edLast = null, edRectStart = null;
 let clipPatch = null;                              // 跨頁剪貼簿
 let edObjects = [], edSel = -1, edAction = null;   // 浮動圖層、目前選取、拖曳動作
+let edRedo = [], snapGuides = [];                  // 重做堆疊、對齊吸附線
 let baseC = null, baseG = null;                    // 底圖（筆刷/方塊/剪下作用於此）
 let origC = null;                                  // 開啟修圖時的原樣，橡皮擦用來擦回原圖
 let eraseTmp = null;                               // 橡皮擦的暫存畫布（重複使用，避免每次新建）
@@ -752,11 +786,13 @@ function openEditor(sheet) {
   eraseTmp.width = baseC.width; eraseTmp.height = baseC.height;
   edCanvas.width = baseC.width; edCanvas.height = baseC.height;
   edCtx = edCanvas.getContext('2d');
-  edUndo = []; edObjects = []; edSel = -1; edAction = null; edLayerNo = 0;
+  edUndo = []; edRedo = []; edObjects = []; edSel = -1; edAction = null; edLayerNo = 0;
+  snapGuides = []; txtEditing = -1; lastGrab = null; lastGrabLayer = null;
+  $('edTxtEdit').style.display = 'none'; $('edQuick').style.display = 'none';
   edColor = '#ffffff';
   $('edswatch').style.background = edColor;
   $('edzoom').value = 'fit';
-  setEdTool('brush');
+  setEdTool('pointer');
   $('edpaste').disabled = !clipPatch;
   $('editor').hidden = false;
   edSetZoom();
@@ -766,8 +802,7 @@ function openEditor(sheet) {
 
 function setEdTool(t) {
   edTool = t;
-  const gw = $('edGrabWrap');
-  if (gw) gw.style.display = (t === 'grab') ? 'inline-flex' : 'none';
+  syncGrabWrap();
   document.querySelectorAll('#edbar [data-tool]').forEach(b =>
     b.classList.toggle('tsel', b.dataset.tool === t));
 }
@@ -784,6 +819,7 @@ let regrabT = null;
 
 $('edzoom').addEventListener('input', edSetZoom);
 function edSetZoom() {
+  setTimeout(syncQuickBar, 0);
   const wrapW = $('edwrap').clientWidth - 40;
   const z = $('edzoom').value;
   const fitW = Math.min(wrapW, edCanvas.width);
@@ -803,25 +839,91 @@ function handleSize() {
   const r = edCanvas.getBoundingClientRect();
   return Math.max(12, 12 * edCanvas.width / r.width);
 }
+/* 圖層可以旋轉、調透明度：畫、量、合併都走這組換算 */
+function objCenter(o) { return { x: o.x + o.w / 2, y: o.y + o.h / 2 }; }
+function spin(pt, o, sign) {
+  const c = objCenter(o), a = sign * (o.rot || 0);
+  const dx = pt.x - c.x, dy = pt.y - c.y, cs = Math.cos(a), sn = Math.sin(a);
+  return { x: c.x + dx * cs - dy * sn, y: c.y + dx * sn + dy * cs };
+}
+function toWorld(pt, o) { return spin(pt, o, 1); }
+function toLocal(pt, o) { return spin(pt, o, -1); }
+function ptInObj(p, o) {
+  const l = toLocal(p, o);
+  return l.x >= o.x && l.x <= o.x + o.w && l.y >= o.y && l.y <= o.y + o.h;
+}
+/* 八個把手：四角＝等比縮放，四邊中點＝單邊拉長 */
+const HANDLES = [
+  { k: 'nw', dx: -1, dy: -1 }, { k: 'n', dx: 0, dy: -1 }, { k: 'ne', dx: 1, dy: -1 },
+  { k: 'e', dx: 1, dy: 0 }, { k: 'se', dx: 1, dy: 1 }, { k: 's', dx: 0, dy: 1 },
+  { k: 'sw', dx: -1, dy: 1 }, { k: 'w', dx: -1, dy: 0 },
+];
+function handlePos(o, h) {
+  return toWorld({ x: o.x + o.w * (h.dx + 1) / 2, y: o.y + o.h * (h.dy + 1) / 2 }, o);
+}
+function rotHandlePos(o) {
+  return toWorld({ x: o.x + o.w / 2, y: o.y - handleSize() * 2 }, o);
+}
 function objCorners(o) {
-  return [[o.x, o.y], [o.x + o.w, o.y], [o.x, o.y + o.h], [o.x + o.w, o.y + o.h]];
+  return [[o.x, o.y], [o.x + o.w, o.y], [o.x, o.y + o.h], [o.x + o.w, o.y + o.h]]
+    .map(c => { const w = toWorld({ x: c[0], y: c[1] }, o); return [w.x, w.y]; });
+}
+function drawObj(g, o) {
+  const c = objCenter(o);
+  g.save();
+  if (o.alpha != null) g.globalAlpha = o.alpha;
+  if (o.rot) { g.translate(c.x, c.y); g.rotate(o.rot); g.translate(-c.x, -c.y); }
+  g.drawImage(o.canvas, o.x, o.y, o.w, o.h);
+  g.restore();
+}
+/* 移動時自動對齊：貼到頁面中線、頁邊，或別的圖層的邊與中線 */
+function applySnap(o, off) {
+  snapGuides = [];
+  if (off) return;                                   // 按住 Shift 就不吸附
+  const r = edCanvas.getBoundingClientRect();
+  const thr = 9 * (edCanvas.width / Math.max(1, r.width));
+  const W = edCanvas.width, H = edCanvas.height;
+  const xs = [0, W / 2, W], ys = [0, H / 2, H];
+  edObjects.forEach(q => {
+    if (q === o) return;
+    xs.push(q.x, q.x + q.w / 2, q.x + q.w);
+    ys.push(q.y, q.y + q.h / 2, q.y + q.h);
+  });
+  const pick = (mine, list) => {
+    let best = null;
+    mine.forEach(m => list.forEach(t => {
+      const d = Math.abs(m - t);
+      if (d < thr && (!best || d < best.d)) best = { d: d, delta: t - m, at: t };
+    }));
+    return best;
+  };
+  const bx = pick([o.x, o.x + o.w / 2, o.x + o.w], xs);
+  if (bx) { o.x += bx.delta; snapGuides.push({ v: bx.at }); }
+  const by = pick([o.y, o.y + o.h / 2, o.y + o.h], ys);
+  if (by) { o.y += by.delta; snapGuides.push({ h: by.at }); }
 }
 
 /* 重畫：底圖 + 所有圖層 + 選取框與四角把手 */
 function edRedraw() {
   edCtx.drawImage(baseC, 0, 0);
   edObjects.forEach((o, i) => {
-    edCtx.drawImage(o.canvas, o.x, o.y, o.w, o.h);
+    drawObj(edCtx, o);
     if (i === edSel) {
-      const hs = handleSize();
-      edCtx.strokeStyle = '#1a73e8'; edCtx.lineWidth = Math.max(2, hs / 6);
-      edCtx.setLineDash([hs * 0.7, hs * 0.5]);
-      edCtx.strokeRect(o.x, o.y, o.w, o.h);
-      edCtx.setLineDash([]);
-      for (const [cx, cy] of objCorners(o)) {
+      const hs = handleSize(), cs = objCorners(o);
+      edCtx.strokeStyle = '#1a73e8'; edCtx.lineWidth = Math.max(2, hs / 7);
+      edCtx.beginPath();
+      edCtx.moveTo(cs[0][0], cs[0][1]); edCtx.lineTo(cs[1][0], cs[1][1]);
+      edCtx.lineTo(cs[3][0], cs[3][1]); edCtx.lineTo(cs[2][0], cs[2][1]);
+      edCtx.closePath(); edCtx.stroke();
+      const rp = rotHandlePos(o), tm = handlePos(o, { dx: 0, dy: -1 });
+      edCtx.beginPath(); edCtx.moveTo(tm.x, tm.y); edCtx.lineTo(rp.x, rp.y); edCtx.stroke();
+      edCtx.fillStyle = '#1a73e8';
+      edCtx.beginPath(); edCtx.arc(rp.x, rp.y, hs * 0.6, 0, Math.PI * 2); edCtx.fill();
+      for (const h of HANDLES) {
+        const q = handlePos(o, h);
         edCtx.fillStyle = '#fff';
-        edCtx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
-        edCtx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+        edCtx.beginPath(); edCtx.arc(q.x, q.y, hs * 0.45, 0, Math.PI * 2);
+        edCtx.fill(); edCtx.stroke();
       }
     }
   });
@@ -829,11 +931,23 @@ function edRedraw() {
     edCtx.save(); edCtx.globalAlpha = 0.35;
     edCtx.drawImage(selMaskC, 0, 0); edCtx.restore();
   }
+  if (snapGuides.length) {                      // 對齊到中線／邊時出現的粉紅線
+    edCtx.save();
+    edCtx.strokeStyle = '#ff2d95'; edCtx.lineWidth = Math.max(2, handleSize() / 6);
+    for (const gd of snapGuides) {
+      edCtx.beginPath();
+      if (gd.v != null) { edCtx.moveTo(gd.v, 0); edCtx.lineTo(gd.v, edCanvas.height); }
+      else { edCtx.moveTo(0, gd.h); edCtx.lineTo(edCanvas.width, gd.h); }
+      edCtx.stroke();
+    }
+    edCtx.restore();
+  }
   syncLayerSel();
   $('eddelete').disabled = edSel < 0;
   const canCut = edSel >= 0 && !edObjects[edSel].isText;
   $('edCutout').disabled = !canCut;
   $('edTolWrap').style.display = (canCut && edObjects[edSel].cutTol != null) ? 'flex' : 'none';
+  syncQuickBar();
 }
 
 /* ===== 🗂 圖層面板：清單由上到下＝從最上層到最下層 ===== */
@@ -936,6 +1050,7 @@ $('edLayerList').addEventListener('click', e => {
 /* 調整層序：陣列後面＝畫在上面 */
 function moveLayer(to) {
   if (edSel < 0) return;
+  edPushUndo(false);
   const o = edObjects.splice(edSel, 1)[0];
   const n = Math.max(0, Math.min(edObjects.length, to));
   edObjects.splice(n, 0, o);
@@ -1312,6 +1427,7 @@ function currentTextOpt() {
 }
 
 function addTextLayer(text, opt, at) {
+  edPushUndo(false);
   const o = Object.assign({}, opt);
   const c = makeTextCanvas(text, o);
   const x = at ? at.x - c.width / 2 : (edCanvas.width - c.width) / 2;
@@ -1323,26 +1439,18 @@ function addTextLayer(text, opt, at) {
 }
 
 $('edAddText').addEventListener('click', () => {
-  const t = prompt('要加什麼字？（可換行）', '');
-  if (t === null || !t.trim()) return;
-  addTextLayer(t, currentTextOpt());
-  $('edhint').textContent = '✔ 文字已加入：拖曳可移動、拉四角可縮放、雙擊可改字；完成後按「✅ 完成」';
+  addTextLayer('在這裡打字', currentTextOpt());
+  openTextEditor(edObjects.length - 1);
+  $('edhint').textContent = '✔ 直接打字就好；打完點旁邊就結束。拖曳移動、拉把手縮放、上面圓點轉角度、雙擊可再改字';
 });
 
 /* 雙擊文字圖層 → 修改文字（保持位置與大小比例） */
 edCanvas.addEventListener('dblclick', e => {
   const p = edPoint(e);
   for (let i = edObjects.length - 1; i >= 0; i--) {
-    const o = edObjects[i];
-    if (!o.isText) continue;
-    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) {
-      const t = prompt('修改文字：', o.text);
-      if (t === null) return;
-      const scale = o.w / o.canvas.width;
-      const c = makeTextCanvas(t, o.opt);
-      o.canvas = c; o.text = t;
-      o.w = c.width * scale; o.h = c.height * scale;
-      edSel = i; edRedraw(); renderLayerList();
+    if (edObjects[i].isText && ptInObj(p, edObjects[i])) {
+      edPushUndo(false);
+      openTextEditor(i);
       return;
     }
   }
@@ -1351,6 +1459,7 @@ edCanvas.addEventListener('dblclick', e => {
 /* 📋 貼上＝新增一個圖層；同一份內容可連續貼很多層（位置稍微錯開） */
 $('edpaste').addEventListener('click', () => {
   if (!clipPatch) return;
+  edPushUndo(false);
   const k = edCanvas.width / clipPatch.srcW;
   const w = clipPatch.canvas.width * k, h = clipPatch.canvas.height * k;
   const off = (edObjects.length % 8) * handleSize();
@@ -1402,6 +1511,7 @@ window.addEventListener('paste', ev => {
 });
 $('eddelete').addEventListener('click', () => {
   if (edSel < 0) return;
+  edPushUndo(false);
   edObjects.splice(edSel, 1);
   edSel = -1;
   edRedraw();
@@ -1990,18 +2100,50 @@ $('importFile').addEventListener('change', async e => {
   }
 });
 
-function edPushUndo() {
-  edUndo.push(baseC.toDataURL('image/jpeg', 0.95));
-  if (edUndo.length > 15) edUndo.shift();
+/* ===== ↩ 復原 / ↪ 重做：所有動作都算數，包含移動、縮放、旋轉、刪圖層 ===== */
+function edState(withBase) {
+  return {
+    base: withBase === false ? null : baseC.toDataURL('image/jpeg', 0.95),
+    objs: edObjects.map(o => Object.assign({}, o)),
+    sel: edSel,
+  };
 }
-
-$('edundo').addEventListener('click', () => {
-  const u = edUndo.pop();
-  if (!u) return;
-  const im = new Image();
-  im.onload = () => { baseG.drawImage(im, 0, 0); edRedraw(); };
-  im.src = u;
-});
+function edPushUndo(withBase) {
+  edUndo.push(edState(withBase));
+  if (edUndo.length > 25) edUndo.shift();
+  edRedo.length = 0;
+}
+/* 拖曳類動作：按下時先記狀態，真的動了才寫進復原（只是點一下選取不算） */
+function beginAction(a) { a.st = edState(false); a.dirty = false; edAction = a; }
+function markDirty() {
+  if (!edAction || edAction.dirty) return;
+  edAction.dirty = true;
+  edUndo.push(edAction.st);
+  if (edUndo.length > 25) edUndo.shift();
+  edRedo.length = 0;
+}
+function edApply(st, done) {
+  edObjects = st.objs.map(o => Object.assign({}, o));
+  edSel = Math.min(st.sel, edObjects.length - 1);
+  const finish = () => { edRedraw(); renderLayerList(); if (done) done(); };
+  if (st.base) {
+    const im = new Image();
+    im.onload = () => {
+      baseG.clearRect(0, 0, baseC.width, baseC.height);
+      baseG.drawImage(im, 0, 0); finish();
+    };
+    im.src = st.base;
+  } else finish();
+}
+function edStepHistory(from, to) {
+  if (!from.length) return;
+  const st = from.pop();
+  to.push(edState(true));
+  if (to.length > 25) to.shift();
+  edApply(st);
+}
+$('edundo').addEventListener('click', () => edStepHistory(edUndo, edRedo));
+$('edredo').addEventListener('click', () => edStepHistory(edRedo, edUndo));
 
 /* ===== 🪄 點一下抓內容 / 🖍 塗抹選取 =====
    不用一格一格框：點標題就整條抓起來，或用筆刷塗過想要的地方。
@@ -2162,21 +2304,20 @@ function magicGrab(px, py) {
     '抓太多或抓不夠，就拉旁邊的「抓取範圍」「顏色深淺」原地重抓。',
     [Math.round(bg[0]), Math.round(bg[1]), Math.round(bg[2])]);
   lastGrabLayer = ok ? edObjects[edObjects.length - 1] : null;
+  if (ok) setEdTool('pointer');                 // 抓完就回到選取，跟 Canva 一樣
 }
 
 /* 拉滑桿＝用同一個點重抓一次（先把剛剛那次還原） */
 function regrab() {
-  if (!lastGrab || edTool !== 'grab') return;
+  if (!lastGrab) return;
   const i = lastGrabLayer ? edObjects.indexOf(lastGrabLayer) : -1;
   if (i < 0 || i !== edObjects.length - 1 || !edUndo.length) {
     magicGrab(lastGrab.x, lastGrab.y);        // 中間動過別的東西，就只是再抓一次
     return;
   }
-  edObjects.pop();                            // 先把剛剛那次收回，才不會愈抓愈多層
-  const u = edUndo.pop();
-  const im = new Image();
-  im.onload = () => { baseG.drawImage(im, 0, 0); magicGrab(lastGrab.x, lastGrab.y); };
-  im.src = u;
+  const st = edUndo.pop();                    // 先回到抓之前，再用新設定抓一次
+  edRedo.length = 0;
+  edApply(st, () => magicGrab(lastGrab.x, lastGrab.y));
 }
 
 /* 🖍 塗抹選取：塗過的地方整塊抓成圖層 */
@@ -2198,6 +2339,7 @@ function finishLasso() {
     }
   }
   if (x1 < 0) { edRedraw(); return; }
+  setEdTool('pointer');
   liftMask(mask, null, { x0, y0, x1, y1 },
     '🖍 塗到的範圍抓起來了：拖曳移動、拉四角縮放。要去掉白底就按「🪄 去背」。',
     [Math.round(pbg[0]), Math.round(pbg[1]), Math.round(pbg[2])]);
@@ -2207,24 +2349,34 @@ edCanvas.addEventListener('pointerdown', e => {
   e.preventDefault();
   const p = edPoint(e);
 
-  // 1) 圖層優先：選取中的四角把手 → 等比縮放（對角為錨點）
+  // 1) 選取中的圖層：先看旋轉鈕，再看八個把手
   if (edSel >= 0 && edObjects[edSel]) {
-    const o = edObjects[edSel], hs = handleSize(), cs = objCorners(o);
-    for (let ci = 0; ci < 4; ci++) {
-      if (Math.abs(p.x - cs[ci][0]) <= hs && Math.abs(p.y - cs[ci][1]) <= hs) {
-        const a = cs[3 - ci];
-        edAction = { type: 'resize', ax: a[0], ay: a[1], aspect: o.canvas.height / o.canvas.width };
-        edDrawing = true; edCanvas.setPointerCapture(e.pointerId);
-        return;
-      }
+    const o = edObjects[edSel], hs = handleSize();
+    const rp = rotHandlePos(o);
+    if (Math.hypot(p.x - rp.x, p.y - rp.y) <= hs) {
+      const c = objCenter(o);
+      beginAction({ type: 'rot', cx: c.x, cy: c.y,
+                    off: Math.atan2(p.y - c.y, p.x - c.x) - (o.rot || 0) });
+      edDrawing = true; edCanvas.setPointerCapture(e.pointerId);
+      return;
+    }
+    for (const h of HANDLES) {
+      const q = handlePos(o, h);
+      if (Math.hypot(p.x - q.x, p.y - q.y) > hs) continue;
+      const an = toWorld({ x: o.x + o.w * (1 - h.dx) / 2,
+                           y: o.y + o.h * (1 - h.dy) / 2 }, o);   // 對邊／對角當錨點
+      beginAction({ type: 'resize', h: h, ax: an.x, ay: an.y, rot: o.rot || 0,
+                    w0: o.w, h0: o.h, aspect: o.h / o.w });
+      edDrawing = true; edCanvas.setPointerCapture(e.pointerId);
+      return;
     }
   }
   // 2) 點到任何圖層 → 選取並開始移動（最上層優先）
   for (let i = edObjects.length - 1; i >= 0; i--) {
-    const o = edObjects[i];
-    if (p.x >= o.x && p.x <= o.x + o.w && p.y >= o.y && p.y <= o.y + o.h) {
+    if (ptInObj(p, edObjects[i])) {
+      const o = edObjects[i];
       edSel = i;
-      edAction = { type: 'move', dx: p.x - o.x, dy: p.y - o.y };
+      beginAction({ type: 'move', dx: p.x - o.x, dy: p.y - o.y });
       edDrawing = true; edCanvas.setPointerCapture(e.pointerId);
       edRedraw();
       return;
@@ -2241,6 +2393,7 @@ edCanvas.addEventListener('pointerdown', e => {
     return;
   }
   if (edTool === 'grab') { magicGrab(p.x, p.y); return; }
+  if (edTool === 'pointer') return;             // 純選取：不會在底圖上留下任何東西
   edCanvas.setPointerCapture(e.pointerId);
   edDrawing = true;
   if (edTool === 'brush') {
@@ -2271,16 +2424,33 @@ edCanvas.addEventListener('pointerdown', e => {
 edCanvas.addEventListener('pointermove', e => {
   if (!edDrawing) return;
   const p = edPoint(e);
-  if (edAction && edObjects[edSel]) {           // 圖層移動 / 縮放
+  if (edAction && edObjects[edSel]) {           // 圖層移動 / 縮放 / 旋轉
     const o = edObjects[edSel];
+    markDirty();
     if (edAction.type === 'move') {
       o.x = p.x - edAction.dx; o.y = p.y - edAction.dy;
+      applySnap(o, e.shiftKey);
+    } else if (edAction.type === 'rot') {
+      let a = Math.atan2(p.y - edAction.cy, p.x - edAction.cx) - edAction.off;
+      if (e.shiftKey) {
+        a = Math.round(a / (Math.PI / 12)) * (Math.PI / 12);      // 每 15 度一格
+      } else {
+        const q = Math.round(a / (Math.PI / 2)) * (Math.PI / 2);  // 快正的時候自動轉正
+        if (Math.abs(a - q) < 0.06) a = q;
+      }
+      o.rot = a;
     } else {
-      const w = Math.max(15, Math.abs(p.x - edAction.ax));
-      const h = w * edAction.aspect;
+      const a = edAction, cs = Math.cos(-a.rot), sn = Math.sin(-a.rot);
+      const dx = p.x - a.ax, dy = p.y - a.ay;
+      const lx = dx * cs - dy * sn, ly = dx * sn + dy * cs;
+      const w = a.h.dx ? Math.max(15, Math.abs(lx)) : a.w0;
+      let h = a.h.dy ? Math.max(15, Math.abs(ly)) : a.h0;
+      if (a.h.dx && a.h.dy) h = w * a.aspect;                     // 角落＝等比
+      const ox = a.h.dx * w / 2, oy = a.h.dy * h / 2;
+      const rc = Math.cos(a.rot), rs = Math.sin(a.rot);
       o.w = w; o.h = h;
-      o.x = p.x < edAction.ax ? edAction.ax - w : edAction.ax;
-      o.y = p.y < edAction.ay ? edAction.ay - h : edAction.ay;
+      o.x = a.ax + ox * rc - oy * rs - w / 2;
+      o.y = a.ay + ox * rs + oy * rc - h / 2;
     }
     edRedraw();
     return;
@@ -2372,10 +2542,161 @@ edCanvas.addEventListener('pointerup', e => {
     edRedraw();
   }
   edDrawing = false; edRectStart = null; edAction = null;
+  if (snapGuides.length) { snapGuides = []; }
+  edRedraw();
 });
 
 $('edcancel').addEventListener('click', () => {
   $('editor').hidden = true; edSheet = null; edObjects = []; edSel = -1;
+    $('edQuick').style.display = 'none'; $('edTxtEdit').style.display = 'none';
+});
+
+
+/* ===== 選到東西就浮出小工具列（Canva 那一條）===== */
+let alphaSt = null, nudgeT = null, txtEditing = -1;
+
+function syncGrabWrap() {
+  const gw = $('edGrabWrap');
+  if (!gw) return;
+  const live = lastGrabLayer && edObjects.length &&
+               edObjects[edObjects.length - 1] === lastGrabLayer;
+  gw.style.display = (edTool === 'grab' || live) ? 'inline-flex' : 'none';
+}
+
+function syncQuickBar() {
+  syncGrabWrap();
+  const q = $('edQuick');
+  if (!q) return;
+  const o = edSel >= 0 ? edObjects[edSel] : null;
+  if (!o || $('editor').hidden || edDrawing) { q.style.display = 'none'; return; }
+  const r = edCanvas.getBoundingClientRect(), k = r.width / edCanvas.width;
+  const wr = $('edwrap').getBoundingClientRect();
+  const cs = objCorners(o);
+  const xs = cs.map(c => c[0]), ys = cs.map(c => c[1]);
+  const l = r.left + Math.min.apply(null, xs) * k, rt = r.left + Math.max.apply(null, xs) * k;
+  const tp = r.top + Math.min.apply(null, ys) * k, bt = r.top + Math.max.apply(null, ys) * k;
+  if (rt < wr.left || l > wr.right || bt < wr.top || tp > wr.bottom) {
+    q.style.display = 'none'; return;           // 選到的東西捲出畫面了就不要浮著
+  }
+  q.style.display = 'flex';
+  const bw = q.offsetWidth || 400, bh = q.offsetHeight || 40;
+  let top = tp - bh - 16;
+  if (top < wr.top + 4) top = bt + 16;          // 太靠上就改放下面
+  q.style.left = Math.max(8, Math.min(window.innerWidth - bw - 8, (l + rt) / 2 - bw / 2)) + 'px';
+  q.style.top = Math.max(wr.top + 4, Math.min(wr.bottom - bh - 4, top)) + 'px';
+  $('qCut').disabled = !!o.isText;
+  $('qUp').disabled = edSel === edObjects.length - 1;
+  $('qDown').disabled = edSel === 0;
+  $('qAlpha').value = Math.round((o.alpha == null ? 1 : o.alpha) * 100);
+}
+
+function dupLayer() {
+  if (edSel < 0) return;
+  edPushUndo(false);
+  const o = edObjects[edSel];
+  const c = document.createElement('canvas');
+  c.width = o.canvas.width; c.height = o.canvas.height;
+  c.getContext('2d').drawImage(o.canvas, 0, 0);
+  const n = Object.assign({}, o, { canvas: c, no: nextLayerNo(),
+                                   x: o.x + handleSize() * 1.5, y: o.y + handleSize() * 1.5 });
+  edObjects.splice(edSel + 1, 0, n);
+  edSel += 1;
+  edRedraw(); renderLayerList();
+}
+
+$('qDup').addEventListener('click', dupLayer);
+$('qUp').addEventListener('click', () => moveLayer(edSel + 1));
+$('qDown').addEventListener('click', () => moveLayer(edSel - 1));
+$('qDel').addEventListener('click', () => $('eddelete').click());
+$('qCut').addEventListener('click', () => $('edCutout').click());
+$('qAlpha').addEventListener('pointerdown', () => { alphaSt = edState(false); });
+$('qAlpha').addEventListener('input', () => {
+  if (edSel < 0) return;
+  edObjects[edSel].alpha = +$('qAlpha').value / 100;
+  edRedraw();
+});
+$('qAlpha').addEventListener('change', () => {
+  if (alphaSt) { edUndo.push(alphaSt); edRedo.length = 0; alphaSt = null; }
+});
+$('edwrap').addEventListener('scroll', syncQuickBar);
+window.addEventListener('resize', () => {
+  if (!$('editor').hidden) { edSetZoom(); edRedraw(); }   // 視窗變大變小，整頁檢視要重新算
+});
+
+/* ===== 鍵盤：Canva 常用的那幾個鍵 ===== */
+window.addEventListener('keydown', e => {
+  if ($('editor').hidden) return;
+  const t = e.target, tag = (t.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || t.isContentEditable) return;
+  const meta = e.ctrlKey || e.metaKey, key = (e.key || '').toLowerCase();
+  if (meta && key === 'z') {
+    e.preventDefault();
+    edStepHistory(e.shiftKey ? edRedo : edUndo, e.shiftKey ? edUndo : edRedo);
+    return;
+  }
+  if (meta && key === 'y') { e.preventDefault(); edStepHistory(edRedo, edUndo); return; }
+  if (meta && key === 'd') { e.preventDefault(); dupLayer(); return; }
+  if (e.key === 'Escape') {
+    if (edSel >= 0) { e.preventDefault(); edSel = -1; edRedraw(); }
+    return;
+  }
+  if (edSel < 0) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    $('eddelete').click();
+    return;
+  }
+  const step = e.shiftKey ? 40 : 6;
+  const mv = { ArrowLeft: [-step, 0], ArrowRight: [step, 0],
+               ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
+  if (!mv) return;
+  e.preventDefault();
+  if (!nudgeT) edPushUndo(false);              // 一連串微調算一次復原
+  clearTimeout(nudgeT);
+  nudgeT = setTimeout(() => { nudgeT = null; }, 600);
+  edObjects[edSel].x += mv[0]; edObjects[edSel].y += mv[1];
+  edRedraw();
+});
+
+/* ===== 文字直接在畫面上打，不跳小視窗 ===== */
+function openTextEditor(i) {
+  const o = edObjects[i];
+  if (!o || !o.isText) return;
+  txtEditing = i; edSel = i; edRedraw();
+  const ta = $('edTxtEdit');
+  const r = edCanvas.getBoundingClientRect(), k = r.width / edCanvas.width;
+  const px = Math.max(12, o.opt.size * (o.w / o.canvas.width) * k);
+  ta.value = o.text;
+  ta.style.display = 'block';
+  ta.style.fontFamily = o.opt.font;
+  ta.style.fontWeight = o.opt.bold ? 'bold' : 'normal';
+  ta.style.color = o.opt.color;
+  ta.style.fontSize = px + 'px';
+  ta.style.left = (r.left + o.x * k) + 'px';
+  ta.style.top = (r.top + o.y * k) + 'px';
+  ta.style.width = Math.max(90, o.w * k) + 'px';
+  ta.style.height = Math.max(px * 1.5, o.h * k) + 'px';
+  ta.focus(); ta.select();
+}
+function applyTextEdit(close) {
+  if (txtEditing < 0) return;
+  const o = edObjects[txtEditing], ta = $('edTxtEdit');
+  if (o && o.isText) {
+    const scale = o.w / o.canvas.width;
+    const c = makeTextCanvas(ta.value === '' ? ' ' : ta.value, o.opt);
+    o.canvas = c; o.text = ta.value;
+    o.w = c.width * scale; o.h = c.height * scale;
+  }
+  if (close) { ta.style.display = 'none'; txtEditing = -1; }
+  edRedraw(); renderLayerList();
+}
+$('edTxtEdit').addEventListener('input', () => applyTextEdit(false));
+$('edTxtEdit').addEventListener('blur', () => applyTextEdit(true));
+$('edTxtEdit').addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+    e.preventDefault(); $('edTxtEdit').blur();
+  }
 });
 
 $('edok').addEventListener('click', () => {
@@ -2384,7 +2705,7 @@ $('edok').addEventListener('click', () => {
   out.width = edCanvas.width; out.height = edCanvas.height;
   const g = out.getContext('2d');
   g.drawImage(baseC, 0, 0);
-  edObjects.forEach(o => g.drawImage(o.canvas, o.x, o.y, o.w, o.h));
+  edObjects.forEach(o => drawObj(g, o));
   // 存成 JPEG：畫質幾乎無差，但檔案小 5～10 倍，存取都更快
   out.toBlob(b => {
     if (b && edSheet) {
@@ -2396,6 +2717,7 @@ $('edok').addEventListener('click', () => {
       setSaveInfo(`✏️ 修圖已套用（${Math.round(b.size / 1048576 * 10) / 10} MB）— 記得按「☁️⬆ 存到雲端」保存`);
     }
     $('editor').hidden = true; edSheet = null; edObjects = []; edSel = -1;
+    $('edQuick').style.display = 'none'; $('edTxtEdit').style.display = 'none';
   }, 'image/jpeg', 0.97);
 });
 
