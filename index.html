@@ -535,7 +535,18 @@
     <button data-tool="lasso" style="background:#8e44ad">🖍 塗抹選取</button>
     <span id="edGrabWrap" style="display:none;align-items:center;gap:10px">
       <label>抓取範圍 <input type="range" id="edGrabGap" min="6" max="160" value="60"></label>
+    </span>
+    <span id="edSensWrap" style="display:none;align-items:center;gap:10px">
       <label>顏色深淺 <input type="range" id="edGrabTol" min="10" max="160" value="60"></label>
+    </span>
+    <span id="edLassoWrap" style="display:none;align-items:center;gap:10px">
+      <label>塗抹要抓
+        <select id="edLassoMode">
+          <option value="color" selected>只抓我塗到的那個顏色</option>
+          <option value="ink">只抓筆畫（去掉紙的底色）</option>
+          <option value="all">連背景整塊搬走</option>
+        </select>
+      </label>
     </span>
     <button data-tool="line">╱ 直線</button>
     <button data-tool="arrow">➜ 箭頭</button>
@@ -564,7 +575,7 @@
     <button id="edredo">↪ 重做</button>
     <button id="edok">✅ 完成</button>
     <button id="edcancel">✕ 取消</button>
-    <span id="edhint">選東西：🪄 點一下抓內容（點標題就整條抓起來）、🖍 塗抹選取（筆刷塗到哪選到哪）。選到後可拖曳、拉八個把手縮放、上面圓點轉角度，靠近中線會自動對齊。鍵盤：Delete 刪除、方向鍵微調、Ctrl+Z 復原、Ctrl+Shift+Z 重做、Ctrl+D 複製一份。要蓋掉不要的字用 🖌 筆刷或 ▭ 方塊（紙張不是白色先按「吸取顏色」）。按「✅ 完成」才合併存檔</span>
+    <span id="edhint">選東西：🪄 點一下抓內容（點標題就整條抓起來）、🖍 塗抹選取（筆刷塗過想要的東西，預設只抓你塗到的那個顏色，背景透明，不會蓋住底下的線）。選到後可拖曳、拉八個把手縮放、上面圓點轉角度，靠近中線會自動對齊。鍵盤：Delete 刪除、方向鍵微調、Ctrl+Z 復原、Ctrl+Shift+Z 重做、Ctrl+D 複製一份。要蓋掉不要的字用 🖌 筆刷或 ▭ 方塊（紙張不是白色先按「吸取顏色」）。按「✅ 完成」才合併存檔</span>
   </div>
   <div id="edQuick">
     <button id="qDup">⧉ 複製一份</button>
@@ -802,6 +813,7 @@ function openEditor(sheet) {
   edCtx = edCanvas.getContext('2d');
   edUndo = []; edRedo = []; edObjects = []; edSel = -1; edAction = null; edLayerNo = 0;
   snapGuides = []; txtEditing = -1; lastGrab = null; lastGrabLayer = null;
+  lastLassoMask = null; lastLassoLayer = null; lastLiftRestore = null;
   $('edTxtEdit').style.display = 'none'; $('edQuick').style.display = 'none';
   edColor = '#ffffff';
   $('edswatch').style.background = edColor;
@@ -824,11 +836,21 @@ document.querySelectorAll('#edbar [data-tool]').forEach(b =>
   b.addEventListener('click', () => setEdTool(b.dataset.tool)));
 
 let regrabT = null;
+function reAdjust() {
+  const top = edObjects.length ? edObjects[edObjects.length - 1] : null;
+  if (lastLassoLayer && top === lastLassoLayer) relasso();
+  else if (lastGrabLayer && top === lastGrabLayer) regrab();
+  else if (edTool === 'lasso') relasso();
+  else regrab();
+}
 ['edGrabGap', 'edGrabTol'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => {
-    clearTimeout(regrabT); regrabT = setTimeout(regrab, 60);
+    clearTimeout(regrabT); regrabT = setTimeout(reAdjust, 60);
   });
+});
+document.getElementById('edLassoMode').addEventListener('change', () => {
+  clearTimeout(regrabT); regrabT = setTimeout(relasso, 20);
 });
 
 $('edzoom').addEventListener('input', edSetZoom);
@@ -2163,7 +2185,19 @@ $('edredo').addEventListener('click', () => edStepHistory(edRedo, edUndo));
    不用一格一格框：點標題就整條抓起來，或用筆刷塗過想要的地方。
    抓到的東西會變成一個圖層（可拖曳、拉角縮放、刪掉），底圖原地補回底色。 */
 let selMaskC = null, selMaskG = null, selActive = false;
-let lastGrab = null, lastGrabLayer = null;                               // 上次點的位置，調滑桿可以原地重抓
+let lastGrab = null, lastGrabLayer = null, lastLiftRestore = null;
+/* 無失真退回上一次抓取：把原樣貼回去、拿掉那一層，比讀存檔快也不掉畫質 */
+function undoLastLift(layer) {
+  if (!lastLiftRestore || !layer) return false;
+  if (edObjects[edObjects.length - 1] !== layer) return false;
+  baseG.putImageData(lastLiftRestore.data, lastLiftRestore.x, lastLiftRestore.y);
+  edObjects.pop();
+  if (edUndo.length) edUndo.pop();
+  edRedo.length = 0;
+  edSel = -1;
+  return true;
+}
+let lastLassoMask = null, lastLassoLayer = null;   // 上一次塗抹的範圍，調設定可原地重抓
 
 function ensureSelMask() {
   if (!selMaskC || selMaskC.width !== baseC.width || selMaskC.height !== baseC.height) {
@@ -2190,6 +2224,9 @@ function liftMask(mask, holeMask, box, msg, fill) {
   edPushUndo();
   const src = baseG.getImageData(box.x0, box.y0, w, h);
   const hole = baseG.getImageData(box.x0, box.y0, w, h);
+  /* 抓之前的原樣（無失真）：調參數重抓時用這份還原，才不會每調一次畫質就掉一點 */
+  lastLiftRestore = { data: new ImageData(new Uint8ClampedArray(hole.data), w, h),
+                      x: box.x0, y: box.y0 };
   const out = edCtx.createImageData(w, h);
   const fc = fill || cssRGB(edColor);      // 沒指定就用目前的遮蓋色
   const hm = holeMask || mask;
@@ -2217,6 +2254,81 @@ function liftMask(mask, holeMask, box, msg, fill) {
   edRedraw(); renderLayerList();
   $('edhint').textContent = msg;
   return true;
+}
+
+/* 判斷「這個像素是不是我要的那個顏色」。
+   把顏色想成一條從該色通往紙色的線：落在線上的是同一色（含它跟紙混色的邊緣，
+   所以字的毛邊不會被切掉）；偏離這條線的（例如壓在下面的藍線）就不是。 */
+function colorMatcher(d, seed, bg, lim) {
+  const d0 = bg[0] - seed[0], d1 = bg[1] - seed[1], d2 = bg[2] - seed[2];
+  const dd = d0 * d0 + d1 * d1 + d2 * d2;
+  return function (i) {
+    if (d[i + 3] < 8) return false;
+    const p0 = d[i] - seed[0], p1 = d[i + 1] - seed[1], p2 = d[i + 2] - seed[2];
+    let t = dd > 0 ? (p0 * d0 + p1 * d1 + p2 * d2) / dd : 0;
+    if (t < 0) t = 0; else if (t > 1) t = 1;
+    if (t > 0.86) return false;                 // 幾乎就是紙的顏色＝背景
+    const e0 = p0 - t * d0, e1 = p1 - t * d1, e2 = p2 - t * d2;
+    return e0 * e0 + e1 * e1 + e2 * e2 <= lim;
+  };
+}
+
+/* 在點到的地方附近找出「最有代表性的顏色」：離紙色最遠的那一點，
+   才不會取到字邊緣那種半透明的灰。 */
+function seedColorAt(d, W, H, cx, cy, bg) {
+  let best = null, bd = -1;
+  for (let y = Math.max(0, cy - 4); y <= Math.min(H - 1, cy + 4); y++) {
+    for (let x = Math.max(0, cx - 4); x <= Math.min(W - 1, cx + 4); x++) {
+      const i = (y * W + x) * 4;
+      const a = d[i] - bg[0], b = d[i + 1] - bg[1], c = d[i + 2] - bg[2];
+      const dist = a * a + b * b + c * c;
+      if (dist > bd) { bd = dist; best = [d[i], d[i + 1], d[i + 2]]; }
+    }
+  }
+  return best || [0, 0, 0];
+}
+
+/* 把形狀「內部」的洞補起來（例如綠色橫幅裡的白字），
+   從外框往內灌水，灌不到的就是被包住的洞。 */
+function fillHoles(mask, W, box) {
+  const bw = box.x1 - box.x0 + 1, bh = box.y1 - box.y0 + 1;
+  if (bw < 3 || bh < 3) return;
+  let on = 0;                                   // 只有「實心色塊」才填洞：
+  for (let y = 0; y < bh; y++) {                // 橫幅、方框那種要填（裡面的白字要帶走），
+    for (let x = 0; x < bw; x++) {              // 一行細細的字不填（不然 o、e 中間會變白塊）
+      if (mask[(y + box.y0) * W + (x + box.x0)]) on++;
+    }
+  }
+  if (on / (bw * bh) < 0.5) return;
+  const out = new Uint8Array(bw * bh);
+  const st = [];
+  for (let x = 0; x < bw; x++) {
+    for (const y of [0, bh - 1]) {
+      const n = y * bw + x;
+      if (!out[n] && !mask[(y + box.y0) * W + (x + box.x0)]) { out[n] = 1; st.push(n); }
+    }
+  }
+  for (let y = 0; y < bh; y++) {
+    for (const x of [0, bw - 1]) {
+      const n = y * bw + x;
+      if (!out[n] && !mask[(y + box.y0) * W + (x + box.x0)]) { out[n] = 1; st.push(n); }
+    }
+  }
+  while (st.length) {
+    const n = st.pop(), x = n % bw, y = (n / bw) | 0;
+    const go = (nx, ny) => {
+      if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) return;
+      const m = ny * bw + nx;
+      if (out[m] || mask[(ny + box.y0) * W + (nx + box.x0)]) return;
+      out[m] = 1; st.push(m);
+    };
+    go(x - 1, y); go(x + 1, y); go(x, y - 1); go(x, y + 1);
+  }
+  for (let y = 0; y < bh; y++) {
+    for (let x = 0; x < bw; x++) {
+      if (!out[y * bw + x]) mask[(y + box.y0) * W + (x + box.x0)] = 1;
+    }
+  }
 }
 
 /* 方形擴張（橫向多、縱向少）：一整行標題會連成一塊，但不會黏到下一行 */
@@ -2255,11 +2367,25 @@ function magicGrab(px, py) {
   const id = baseG.getImageData(0, 0, W, H), d = id.data;
   const bg = edgeBgColor(d, W, H);
   const tol = +$('edGrabTol').value, lim = tol * tol * 3;
-  const isInk = (i) => {
+  const offBg = (i) => {                            // 先粗略判斷「這裡有沒有東西」
     if (d[i + 3] < 8) return false;
     const a = d[i] - bg[0], b = d[i + 1] - bg[1], c = d[i + 2] - bg[2];
     return a * a + b * b + c * c > lim;
   };
+  let sx = -1, sy = -1;                             // 點歪一點也沒關係，往外找最近的內容
+  for (let r = 0; r <= 60 && sx < 0; r += 2) {
+    for (let dy = -r; dy <= r && sx < 0; dy += 2) {
+      for (let dx = -r; dx <= r; dx += 2) {
+        if (r > 0 && Math.abs(dx) !== r && Math.abs(dy) !== r) continue;
+        const nx = cx + dx, ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        if (offBg((ny * W + nx) * 4)) { sx = nx; sy = ny; break; }
+      }
+    }
+  }
+  if (sx < 0) { $('edhint').textContent = '這裡是空白，請點在字或圖上面'; return; }
+  const seed = seedColorAt(d, W, H, sx, sy, bg);    // 點到什麼顏色就抓什麼顏色
+  const isInk = colorMatcher(d, seed, bg, lim);
   const s = Math.max(1, Math.round(Math.min(W, H) / 600));   // 粗網格：一格 s 像素
   const gw = Math.ceil(W / s), gh = Math.ceil(H / s);
   const ink = new Uint8Array(gw * gh);
@@ -2273,13 +2399,13 @@ function magicGrab(px, py) {
   const ry = Math.max(1, Math.round(gap * k * 0.22 / s));
   const dil = dilateGrid(ink, gw, gh, rx, ry);
 
-  let start = ((cy / s) | 0) * gw + ((cx / s) | 0);
+  let start = ((sy / s) | 0) * gw + ((sx / s) | 0);
   if (!dil[start]) {                                         // 點到空白：往外找最近的內容
     let found = -1;
     for (let r = 1; r <= 12 && found < 0; r++) {
       for (let dy = -r; dy <= r && found < 0; dy++) {
         for (let dx = -r; dx <= r; dx++) {
-          const gx2 = ((cx / s) | 0) + dx, gy2 = ((cy / s) | 0) + dy;
+          const gx2 = ((sx / s) | 0) + dx, gy2 = ((sy / s) | 0) + dy;
           if (gx2 < 0 || gy2 < 0 || gx2 >= gw || gy2 >= gh) continue;
           if (dil[gy2 * gw + gx2]) { found = gy2 * gw + gx2; break; }
         }
@@ -2313,6 +2439,8 @@ function magicGrab(px, py) {
     }
   }
   if (x1 < 0) { $('edhint').textContent = '這裡是空白，請點在字或圖上面'; return; }
+  fillHoles(mask, W, { x0, y0, x1, y1 });          // 例如橫幅裡的白字要跟著一起帶走
+  fillHoles(hole, W, { x0, y0, x1, y1 });
   const ok = liftMask(mask, hole, { x0, y0, x1, y1 },
     '🪄 抓起來了！現在它是一個圖層：可以拖曳移動、拉四角縮放、按「🗑 刪除選取」刪掉。' +
     '抓太多或抓不夠，就拉旁邊的「抓取範圍」「顏色深淺」原地重抓。',
@@ -2324,39 +2452,109 @@ function magicGrab(px, py) {
 /* 拉滑桿＝用同一個點重抓一次（先把剛剛那次還原） */
 function regrab() {
   if (!lastGrab) return;
-  const i = lastGrabLayer ? edObjects.indexOf(lastGrabLayer) : -1;
-  if (i < 0 || i !== edObjects.length - 1 || !edUndo.length) {
-    magicGrab(lastGrab.x, lastGrab.y);        // 中間動過別的東西，就只是再抓一次
-    return;
-  }
-  const st = edUndo.pop();                    // 先回到抓之前，再用新設定抓一次
-  edRedo.length = 0;
-  edApply(st, () => magicGrab(lastGrab.x, lastGrab.y));
+  undoLastLift(lastGrabLayer);                // 動過別的東西就會回傳 false，直接再抓一次
+  magicGrab(lastGrab.x, lastGrab.y);
 }
 
-/* 🖍 塗抹選取：塗過的地方整塊抓成圖層 */
+/* 🖍 塗抹選取：先記下塗過的範圍，再依設定抓出內容 */
 function finishLasso() {
   selActive = false;
   const W = baseC.width, H = baseC.height;
-  const pd = baseG.getImageData(0, 0, W, H).data;
-  const pbg = edgeBgColor(pd, W, H);
   const d = selMaskG.getImageData(0, 0, W, H).data;
-  const mask = new Uint8Array(W * H);
   let x0 = W, y0 = H, x1 = -1, y1 = -1;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
-      const p = y * W + x;
-      if (d[p * 4 + 3] < 16) continue;
-      mask[p] = 1;
+      if (d[(y * W + x) * 4 + 3] < 16) continue;
       if (x < x0) x0 = x; if (x > x1) x1 = x;
       if (y < y0) y0 = y; if (y > y1) y1 = y;
     }
   }
   if (x1 < 0) { edRedraw(); return; }
-  setEdTool('pointer');
-  liftMask(mask, null, { x0, y0, x1, y1 },
-    '🖍 塗到的範圍抓起來了：拖曳移動、拉四角縮放。要去掉白底就按「🪄 去背」。',
-    [Math.round(pbg[0]), Math.round(pbg[1]), Math.round(pbg[2])]);
+  const c = document.createElement('canvas');        // 只留塗到的那一小塊，省記憶體
+  c.width = x1 - x0 + 1; c.height = y1 - y0 + 1;
+  c.getContext('2d').drawImage(selMaskC, x0, y0, c.width, c.height, 0, 0, c.width, c.height);
+  lastLassoMask = { canvas: c, x0: x0, y0: y0 };
+  lassoLift();
+}
+
+/* 依「只抓內容」的勾選狀態，把塗到的東西抓成圖層
+   勾起來＝只抓筆畫，背景透明（不會蓋住底下的線）；取消＝連背景整塊搬走 */
+function lassoLift() {
+  if (!lastLassoMask) return;
+  const W = baseC.width, H = baseC.height;
+  const m = lastLassoMask, mw = m.canvas.width, mh = m.canvas.height;
+  const md = m.canvas.getContext('2d').getImageData(0, 0, mw, mh).data;
+  const pd = baseG.getImageData(0, 0, W, H).data;
+  const bg = edgeBgColor(pd, W, H);
+  const mode = $('edLassoMode').value;
+  const tol = +$('edGrabTol').value, lim = tol * tol * 3;
+  let matchSeed = null;
+  if (mode === 'color') {
+    /* 塗到的範圍裡「最多的那個顏色」就是要抓的東西（紙色不算），
+       所以從哪裡下筆都沒關係，塗過去就對了 */
+    const bins = new Map();
+    for (let y = 0; y < mh; y++) {
+      for (let x = 0; x < mw; x++) {
+        if (md[(y * mw + x) * 4 + 3] < 16) continue;
+        const gx = x + m.x0, gy = y + m.y0;
+        if (gx < 0 || gy < 0 || gx >= W || gy >= H) continue;
+        const i = (gy * W + gx) * 4;
+        const a = pd[i] - bg[0], b = pd[i + 1] - bg[1], c2 = pd[i + 2] - bg[2];
+        if (a * a + b * b + c2 * c2 <= lim) continue;        // 紙色不算
+        const k = ((pd[i] >> 4) << 8) | ((pd[i + 1] >> 4) << 4) | (pd[i + 2] >> 4);
+        const v = bins.get(k) || [0, 0, 0, 0];
+        v[0] += pd[i]; v[1] += pd[i + 1]; v[2] += pd[i + 2]; v[3]++;
+        bins.set(k, v);
+      }
+    }
+    let best = null;
+    bins.forEach(v => { if (!best || v[3] > best[3]) best = v; });
+    if (!best) {
+      $('edhint').textContent = '塗到的地方都是空白，沒有東西可以抓 — 再塗一次，蓋到想要的東西上面';
+      edRedraw();
+      return;
+    }
+    matchSeed = colorMatcher(pd, [best[0] / best[3], best[1] / best[3], best[2] / best[3]], bg, lim);
+  }
+  const mask = new Uint8Array(W * H);
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      if (md[(y * mw + x) * 4 + 3] < 16) continue;
+      const gx = x + m.x0, gy = y + m.y0;
+      if (gx < 0 || gy < 0 || gx >= W || gy >= H) continue;
+      const i = (gy * W + gx) * 4;
+      if (mode === 'ink') {                             // 跟紙一樣的顏色＝背景，不要
+        const a = pd[i] - bg[0], b = pd[i + 1] - bg[1], c2 = pd[i + 2] - bg[2];
+        if (a * a + b * b + c2 * c2 <= lim) continue;
+      } else if (mode === 'color' && !matchSeed(i)) continue;
+      mask[gy * W + gx] = 1;
+      if (gx < x0) x0 = gx; if (gx > x1) x1 = gx;
+      if (gy < y0) y0 = gy; if (gy > y1) y1 = gy;
+    }
+  }
+  if (x1 < 0) {
+    $('edhint').textContent = '這樣抓不到東西 — 把「顏色深淺」往右拉放寬一點，或換一個「塗抹要抓」的模式';
+    edRedraw();
+    return;
+  }
+  const msg = {
+    color: '🖍 只抓了你塗到的那個顏色，背景透明，底下的線不會被蓋住。多抓或少抓就拉「顏色深淺」',
+    ink: '🖍 只抓了筆畫，紙的底色變透明，不會蓋住底下的線。抓不乾淨就拉「顏色深淺」',
+    all: '🖍 連背景整塊搬走了（會蓋住底下的東西）。想留住底下的線，就把「塗抹要抓」換成前兩個',
+  }[mode];
+  if (mode === 'color') fillHoles(mask, W, { x0: x0, y0: y0, x1: x1, y1: y1 });
+  const ok = liftMask(mask, null, { x0: x0, y0: y0, x1: x1, y1: y1 }, msg,
+    [Math.round(bg[0]), Math.round(bg[1]), Math.round(bg[2])]);
+  lastLassoLayer = ok ? edObjects[edObjects.length - 1] : null;
+  if (ok) setEdTool('pointer');
+}
+
+/* 調完設定，用同一筆塗抹重抓一次 */
+function relasso() {
+  if (!lastLassoMask) return;
+  undoLastLift(lastLassoLayer);
+  lassoLift();
 }
 
 edCanvas.addEventListener('pointerdown', e => {
@@ -2570,11 +2768,14 @@ $('edcancel').addEventListener('click', () => {
 let alphaSt = null, nudgeT = null, txtEditing = -1;
 
 function syncGrabWrap() {
-  const gw = $('edGrabWrap');
-  if (!gw) return;
-  const live = lastGrabLayer && edObjects.length &&
-               edObjects[edObjects.length - 1] === lastGrabLayer;
-  gw.style.display = (edTool === 'grab' || live) ? 'inline-flex' : 'none';
+  if (!$('edGrabWrap')) return;
+  const top = edObjects.length ? edObjects[edObjects.length - 1] : null;
+  const grabLive = !!(lastGrabLayer && top === lastGrabLayer);
+  const lassoLive = !!(lastLassoLayer && top === lastLassoLayer);
+  const show = (id, on) => { $(id).style.display = on ? 'inline-flex' : 'none'; };
+  show('edGrabWrap', edTool === 'grab' || grabLive);
+  show('edSensWrap', edTool === 'grab' || edTool === 'lasso' || grabLive || lassoLive);
+  show('edLassoWrap', edTool === 'lasso' || lassoLive);
 }
 
 function syncQuickBar() {
