@@ -495,6 +495,12 @@
     <button id="edFillBg">🎨 鋪底色</button>
     <button data-tool="copy">✂ 選取複製</button>
     <button data-tool="cut">✄ 剪下</button>
+    <button data-tool="grab" style="background:#8e44ad">🪄 點一下抓內容</button>
+    <button data-tool="lasso" style="background:#8e44ad">🖍 塗抹選取</button>
+    <span id="edGrabWrap" style="display:none;align-items:center;gap:10px">
+      <label>抓取範圍 <input type="range" id="edGrabGap" min="6" max="160" value="60"></label>
+      <label>顏色深淺 <input type="range" id="edGrabTol" min="10" max="160" value="60"></label>
+    </span>
     <button data-tool="line">╱ 直線</button>
     <button data-tool="arrow">➜ 箭頭</button>
     <button data-tool="circle">◯ 圈選</button>
@@ -521,7 +527,7 @@
     <button id="edundo">↩ 復原</button>
     <button id="edok">✅ 完成</button>
     <button id="edcancel">✕ 取消</button>
-    <span id="edhint">筆刷/方塊蓋掉不要的字；背景非白色先「吸取顏色」。✂複製或✄剪下後按「📋 貼上」＝新增圖層，可拖曳、拉角縮放；圖層選起來按「🪄 去背」就能去掉白底。外面複製的圖直接 Ctrl+V 也能貼進來。按「✅ 完成」才合併存檔</span>
+    <span id="edhint">要挑東西不用一格一格框：「🪄 點一下抓內容」點在標題上就整條抓起來，「🖍 塗抹選取」用筆刷塗過想要的地方；抓到的會變成圖層，可拖曳、拉角縮放、刪掉。筆刷/方塊蓋掉不要的字；背景非白色先「吸取顏色」。✂複製或✄剪下後按「📋 貼上」＝新增圖層，可拖曳、拉角縮放；圖層選起來按「🪄 去背」就能去掉白底。外面複製的圖直接 Ctrl+V 也能貼進來。按「✅ 完成」才合併存檔</span>
   </div>
   <div id="edbody">
     <div id="edwrap"><canvas id="edcanvas"></canvas></div>
@@ -760,11 +766,21 @@ function openEditor(sheet) {
 
 function setEdTool(t) {
   edTool = t;
+  const gw = $('edGrabWrap');
+  if (gw) gw.style.display = (t === 'grab') ? 'inline-flex' : 'none';
   document.querySelectorAll('#edbar [data-tool]').forEach(b =>
     b.classList.toggle('tsel', b.dataset.tool === t));
 }
 document.querySelectorAll('#edbar [data-tool]').forEach(b =>
   b.addEventListener('click', () => setEdTool(b.dataset.tool)));
+
+let regrabT = null;
+['edGrabGap', 'edGrabTol'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', () => {
+    clearTimeout(regrabT); regrabT = setTimeout(regrab, 60);
+  });
+});
 
 $('edzoom').addEventListener('input', edSetZoom);
 function edSetZoom() {
@@ -809,6 +825,10 @@ function edRedraw() {
       }
     }
   });
+  if (selActive && selMaskC) {                  // 塗抹選取的藍色預覽
+    edCtx.save(); edCtx.globalAlpha = 0.35;
+    edCtx.drawImage(selMaskC, 0, 0); edCtx.restore();
+  }
   syncLayerSel();
   $('eddelete').disabled = edSel < 0;
   const canCut = edSel >= 0 && !edObjects[edSel].isText;
@@ -1983,6 +2003,206 @@ $('edundo').addEventListener('click', () => {
   im.src = u;
 });
 
+/* ===== 🪄 點一下抓內容 / 🖍 塗抹選取 =====
+   不用一格一格框：點標題就整條抓起來，或用筆刷塗過想要的地方。
+   抓到的東西會變成一個圖層（可拖曳、拉角縮放、刪掉），底圖原地補回底色。 */
+let selMaskC = null, selMaskG = null, selActive = false;
+let lastGrab = null, lastGrabLayer = null;                               // 上次點的位置，調滑桿可以原地重抓
+
+function ensureSelMask() {
+  if (!selMaskC || selMaskC.width !== baseC.width || selMaskC.height !== baseC.height) {
+    selMaskC = document.createElement('canvas');
+    selMaskC.width = baseC.width; selMaskC.height = baseC.height;
+    selMaskG = selMaskC.getContext('2d');
+  }
+  selMaskG.clearRect(0, 0, selMaskC.width, selMaskC.height);
+}
+
+function cssRGB(css) {
+  const c = document.createElement('canvas'); c.width = c.height = 1;
+  const g = c.getContext('2d');
+  g.fillStyle = css; g.fillRect(0, 0, 1, 1);
+  return g.getImageData(0, 0, 1, 1).data;
+}
+
+/* 把 mask（Uint8Array，1＝選到）的內容搬成一個新圖層，底圖原地填底色。
+   holeMask 給 null 就用 mask 本身當要挖掉的範圍。 */
+function liftMask(mask, holeMask, box, msg, fill) {
+  const W = baseC.width;
+  const w = box.x1 - box.x0 + 1, h = box.y1 - box.y0 + 1;
+  if (w < 4 || h < 4) { $('edhint').textContent = '選到的範圍太小，再試一次'; return false; }
+  edPushUndo();
+  const src = baseG.getImageData(box.x0, box.y0, w, h);
+  const hole = baseG.getImageData(box.x0, box.y0, w, h);
+  const out = edCtx.createImageData(w, h);
+  const fc = fill || cssRGB(edColor);      // 沒指定就用目前的遮蓋色
+  const hm = holeMask || mask;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4, m = (y + box.y0) * W + (x + box.x0);
+      if (mask[m]) {
+        out.data[i] = src.data[i]; out.data[i + 1] = src.data[i + 1];
+        out.data[i + 2] = src.data[i + 2]; out.data[i + 3] = 255;
+      }
+      if (hm[m]) {
+        hole.data[i] = fc[0]; hole.data[i + 1] = fc[1];
+        hole.data[i + 2] = fc[2]; hole.data[i + 3] = 255;
+      }
+    }
+  }
+  baseG.putImageData(hole, box.x0, box.y0);
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  c.getContext('2d').putImageData(out, 0, 0);
+  edObjects.push({ canvas: c, no: nextLayerNo(), x: box.x0, y: box.y0, w, h });
+  edSel = edObjects.length - 1;
+  clipPatch = { canvas: c, srcW: edCanvas.width };
+  $('edpaste').disabled = false;
+  edRedraw(); renderLayerList();
+  $('edhint').textContent = msg;
+  return true;
+}
+
+/* 方形擴張（橫向多、縱向少）：一整行標題會連成一塊，但不會黏到下一行 */
+function dilateGrid(src, w, h, rx, ry) {
+  const t = new Uint8Array(w * h), o = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    let cnt = 0;
+    for (let x = 0; x <= rx && x < w; x++) if (src[row + x]) cnt++;
+    for (let x = 0; x < w; x++) {
+      t[row + x] = cnt > 0 ? 1 : 0;
+      const rem = x - rx, add = x + rx + 1;
+      if (rem >= 0 && src[row + rem]) cnt--;
+      if (add < w && src[row + add]) cnt++;
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let cnt = 0;
+    for (let y = 0; y <= ry && y < h; y++) if (t[y * w + x]) cnt++;
+    for (let y = 0; y < h; y++) {
+      o[y * w + x] = cnt > 0 ? 1 : 0;
+      const rem = y - ry, add = y + ry + 1;
+      if (rem >= 0 && t[rem * w + x]) cnt--;
+      if (add < h && t[add * w + x]) cnt++;
+    }
+  }
+  return o;
+}
+
+/* 點一下 → 把點到的那一塊內容（整行標題、一張圖、一個框）整個抓起來 */
+function magicGrab(px, py) {
+  const W = baseC.width, H = baseC.height;
+  const cx = Math.max(0, Math.min(W - 1, Math.round(px)));
+  const cy = Math.max(0, Math.min(H - 1, Math.round(py)));
+  lastGrab = { x: cx, y: cy };
+  const id = baseG.getImageData(0, 0, W, H), d = id.data;
+  const bg = edgeBgColor(d, W, H);
+  const tol = +$('edGrabTol').value, lim = tol * tol * 3;
+  const isInk = (i) => {
+    if (d[i + 3] < 8) return false;
+    const a = d[i] - bg[0], b = d[i + 1] - bg[1], c = d[i + 2] - bg[2];
+    return a * a + b * b + c * c > lim;
+  };
+  const s = Math.max(1, Math.round(Math.min(W, H) / 600));   // 粗網格：一格 s 像素
+  const gw = Math.ceil(W / s), gh = Math.ceil(H / s);
+  const ink = new Uint8Array(gw * gh);
+  for (let y = 0; y < H; y++) {
+    const gy = ((y / s) | 0) * gw, row = y * W * 4;
+    for (let x = 0; x < W; x++) if (isInk(row + x * 4)) ink[gy + ((x / s) | 0)] = 1;
+  }
+  const k = W / 2480;                                        // 以 A4 300dpi 為基準換算
+  const gap = +$('edGrabGap').value;
+  const rx = Math.max(1, Math.round(gap * k / s));
+  const ry = Math.max(1, Math.round(gap * k * 0.22 / s));
+  const dil = dilateGrid(ink, gw, gh, rx, ry);
+
+  let start = ((cy / s) | 0) * gw + ((cx / s) | 0);
+  if (!dil[start]) {                                         // 點到空白：往外找最近的內容
+    let found = -1;
+    for (let r = 1; r <= 12 && found < 0; r++) {
+      for (let dy = -r; dy <= r && found < 0; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          const gx2 = ((cx / s) | 0) + dx, gy2 = ((cy / s) | 0) + dy;
+          if (gx2 < 0 || gy2 < 0 || gx2 >= gw || gy2 >= gh) continue;
+          if (dil[gy2 * gw + gx2]) { found = gy2 * gw + gx2; break; }
+        }
+      }
+    }
+    if (found < 0) { $('edhint').textContent = '這裡是空白，請點在字或圖上面'; return; }
+    start = found;
+  }
+
+  const comp = new Uint8Array(gw * gh);                       // 從點到的地方往外連通
+  const stack = [start]; comp[start] = 1;
+  while (stack.length) {
+    const c0 = stack.pop(), gx = c0 % gw, gy = (c0 / gw) | 0;
+    if (gx > 0 && dil[c0 - 1] && !comp[c0 - 1]) { comp[c0 - 1] = 1; stack.push(c0 - 1); }
+    if (gx < gw - 1 && dil[c0 + 1] && !comp[c0 + 1]) { comp[c0 + 1] = 1; stack.push(c0 + 1); }
+    if (gy > 0 && dil[c0 - gw] && !comp[c0 - gw]) { comp[c0 - gw] = 1; stack.push(c0 - gw); }
+    if (gy < gh - 1 && dil[c0 + gw] && !comp[c0 + gw]) { comp[c0 + gw] = 1; stack.push(c0 + gw); }
+  }
+
+  const mask = new Uint8Array(W * H), hole = new Uint8Array(W * H);
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) {
+    const gy = ((y / s) | 0) * gw, row = y * W;
+    for (let x = 0; x < W; x++) {
+      const cell = gy + ((x / s) | 0);
+      if (!comp[cell] || !ink[cell]) continue;               // 只留「有內容且連通」的格子
+      hole[row + x] = 1;                                     // 挖掉整格，才不會留灰邊
+      if (isInk((row + x) * 4)) mask[row + x] = 1;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) { $('edhint').textContent = '這裡是空白，請點在字或圖上面'; return; }
+  const ok = liftMask(mask, hole, { x0, y0, x1, y1 },
+    '🪄 抓起來了！現在它是一個圖層：可以拖曳移動、拉四角縮放、按「🗑 刪除選取」刪掉。' +
+    '抓太多或抓不夠，就拉旁邊的「抓取範圍」「顏色深淺」原地重抓。',
+    [Math.round(bg[0]), Math.round(bg[1]), Math.round(bg[2])]);
+  lastGrabLayer = ok ? edObjects[edObjects.length - 1] : null;
+}
+
+/* 拉滑桿＝用同一個點重抓一次（先把剛剛那次還原） */
+function regrab() {
+  if (!lastGrab || edTool !== 'grab') return;
+  const i = lastGrabLayer ? edObjects.indexOf(lastGrabLayer) : -1;
+  if (i < 0 || i !== edObjects.length - 1 || !edUndo.length) {
+    magicGrab(lastGrab.x, lastGrab.y);        // 中間動過別的東西，就只是再抓一次
+    return;
+  }
+  edObjects.pop();                            // 先把剛剛那次收回，才不會愈抓愈多層
+  const u = edUndo.pop();
+  const im = new Image();
+  im.onload = () => { baseG.drawImage(im, 0, 0); magicGrab(lastGrab.x, lastGrab.y); };
+  im.src = u;
+}
+
+/* 🖍 塗抹選取：塗過的地方整塊抓成圖層 */
+function finishLasso() {
+  selActive = false;
+  const W = baseC.width, H = baseC.height;
+  const pd = baseG.getImageData(0, 0, W, H).data;
+  const pbg = edgeBgColor(pd, W, H);
+  const d = selMaskG.getImageData(0, 0, W, H).data;
+  const mask = new Uint8Array(W * H);
+  let x0 = W, y0 = H, x1 = -1, y1 = -1;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const p = y * W + x;
+      if (d[p * 4 + 3] < 16) continue;
+      mask[p] = 1;
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (y < y0) y0 = y; if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < 0) { edRedraw(); return; }
+  liftMask(mask, null, { x0, y0, x1, y1 },
+    '🖍 塗到的範圍抓起來了：拖曳移動、拉四角縮放。要去掉白底就按「🪄 去背」。',
+    [Math.round(pbg[0]), Math.round(pbg[1]), Math.round(pbg[2])]);
+}
+
 edCanvas.addEventListener('pointerdown', e => {
   e.preventDefault();
   const p = edPoint(e);
@@ -2020,6 +2240,7 @@ edCanvas.addEventListener('pointerdown', e => {
     setEdTool('brush');
     return;
   }
+  if (edTool === 'grab') { magicGrab(p.x, p.y); return; }
   edCanvas.setPointerCapture(e.pointerId);
   edDrawing = true;
   if (edTool === 'brush') {
@@ -2033,6 +2254,14 @@ edCanvas.addEventListener('pointerdown', e => {
     edPushUndo();
     edLast = p;
     eraseStroke(p, p, p.scale);
+    edRedraw();
+  } else if (edTool === 'lasso') {
+    ensureSelMask(); selActive = true;
+    selMaskG.fillStyle = '#1a73e8';
+    selMaskG.beginPath();
+    selMaskG.arc(p.x, p.y, $('edsize').value * p.scale / 2, 0, Math.PI * 2);
+    selMaskG.fill();
+    edLast = p;
     edRedraw();
   } else {
     edRectStart = p;    // rect / copy / cut / 直線 / 箭頭 / 圈選 都從按下的那一點開始
@@ -2067,6 +2296,15 @@ edCanvas.addEventListener('pointermove', e => {
     eraseStroke(edLast, p, p.scale);
     edLast = p;
     edRedraw();
+  } else if (edTool === 'lasso' && selActive) {
+    selMaskG.strokeStyle = '#1a73e8';
+    selMaskG.lineWidth = $('edsize').value * p.scale;
+    selMaskG.lineCap = 'round'; selMaskG.lineJoin = 'round';
+    selMaskG.beginPath();
+    selMaskG.moveTo(edLast.x, edLast.y); selMaskG.lineTo(p.x, p.y);
+    selMaskG.stroke();
+    edLast = p;
+    edRedraw();
   } else if (edRectStart && (edTool === 'line' || edTool === 'arrow' || edTool === 'circle')) {
     edRedraw();                                 // 標註預覽：放開才真的畫上去
     drawMark(edCtx, edTool, edRectStart, markEnd(edTool, edRectStart, p, e.shiftKey),
@@ -2089,6 +2327,11 @@ edCanvas.addEventListener('pointermove', e => {
 });
 
 edCanvas.addEventListener('pointerup', e => {
+  if (edTool === 'lasso' && selActive) {
+    finishLasso();
+    edDrawing = false; edRectStart = null; edAction = null;
+    return;
+  }
   if (edDrawing && !edAction && edRectStart) {
     const p = edPoint(e);
     const x = Math.min(edRectStart.x, p.x), y = Math.min(edRectStart.y, p.y);
