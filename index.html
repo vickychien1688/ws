@@ -340,6 +340,11 @@
     .sheet:last-child { page-break-after: auto; break-after: auto; }
     .toctitle:empty::before { content: ''; }
   }
+
+/* Independent full-bleed cover; inner-page geometry stays unchanged. */
+.sheet.cover-full-bleed .imgbox { left: 0 !important; right: 0 !important; top: 0 !important; bottom: 0 !important; }
+.sheet.cover-full-bleed .imgbox img { object-fit: cover !important; }
+.sheet.cover-full-bleed .pagenum, .sheet.cover-full-bleed .footer, .sheet.cover-full-bleed .xtext, .sheet.cover-full-bleed .bindline { display: none !important; }
 </style>
 </head>
 <body class="fit-cover">
@@ -419,6 +424,7 @@
       <label>起始頁 <input type="number" id="startPn" value="1" step="1"></label>
       <label>字級 <input type="number" id="pnSize" value="14" step="1" min="5"> pt</label>
       <label title="第一頁不顯示頁碼"><input type="checkbox" id="coverPage" checked> 第一頁是封面</label>
+      <label title="封面獨立填滿 A4，保留內頁邊界；不顯示封面頁首與頁尾"><input type="checkbox" id="coverFullBleed"> 封面滿版（不留白）</label>
       <label title="封面後自動加目錄"><input type="checkbox" id="tocOn"> 加目錄頁</label>
     </div>
   </details>
@@ -2119,6 +2125,7 @@ $('importFile').addEventListener('change', async e => {
     restoring = true;
     pages.querySelectorAll('.sheet').forEach(s => s.remove());
     tocTitles = head.tocTitles || [];
+    $('coverFullBleed').checked = !!(head.settings && head.settings.coverFullBleed);
     if (head.settings) SETTING_IDS.forEach(id => {
       if (!(id in head.settings)) return;
       const el = $(id);
@@ -2953,6 +2960,7 @@ function getOpts() {
     showPn: $('showPn').checked,
     pnPos: $('pnPos').value,
     coverFirst: $('coverPage').checked,
+    coverFullBleed: $('coverFullBleed').checked,
     tocOn: $('tocOn').checked,
     start: parseInt($('startPn').value) || 1,
     pnPt: parseFloat($('pnSize').value) || 14,
@@ -3156,6 +3164,7 @@ function refresh() {
 
     const isToc = s.classList.contains('toc');
     const isCover = o.coverFirst && i === 0 && !isToc;
+    s.classList.toggle('cover-full-bleed', isCover && o.coverFullBleed);
     const side = resolvePnSide(o, i);
 
     const pn = s.querySelector('.pagenum');
@@ -3251,7 +3260,7 @@ $('zoomSlider').addEventListener('input', () => {   // 拉滑桿＝切到自訂�
   refresh();
 });
 
-const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap','ftGapX','extraTexts'];
+const SETTING_IDS = ['gridCols','viewZoom','zoomSlider','bindCm','topCm','bottomCm','fitMode','showPn','pnPos','coverPage','coverFullBleed','tocOn','startPn','pnSize','mirror','footerText','ftPos','ftFont','ftWeight','ftSize','ftGap','ftGapX','extraTexts'];
 // 填入字型選單（頁尾文字＝黑體、修圖打字＝Comic Sans）
 $('ftFont').innerHTML = fontOptionsHtml('sans');
 $('edTxtFont').innerHTML = fontOptionsHtml('comic');
@@ -3309,6 +3318,7 @@ function applySnapshot(data) {
   restoring = true;
   pages.querySelectorAll('.sheet').forEach(s => s.remove());
   tocTitles = data.tocTitles || [];
+  $('coverFullBleed').checked = !!(data.settings && data.settings.coverFullBleed);
   SETTING_IDS.forEach(id => {
     if (!data.settings || !(id in data.settings)) return;
     const el = $(id);
@@ -3433,6 +3443,7 @@ function restoreState() {
       if (!data || !data.images || !data.images.length) { res(0); return; }
       restoring = true;
       tocTitles = data.tocTitles || [];
+      $('coverFullBleed').checked = !!(data.settings && data.settings.coverFullBleed);
       SETTING_IDS.forEach(id => {
         if (!data.settings || !(id in data.settings)) return;
         const el = $(id);
@@ -3529,6 +3540,8 @@ function drawFooterAndPn(g, o, i, num, W, H) {
 }
 
 function renderSheetToJpeg(sheet, i, num, o, W, H, mime, q) {
+  const fullBleedCover = o.coverFirst && i === 0 && o.coverFullBleed;
+  if (fullBleedCover) o = { ...o, bind: 0, top: 0, bottom: 0, fit: 'cover' };
   const c = document.createElement('canvas');
   c.width = W; c.height = H;
   const g = c.getContext('2d');
@@ -3551,7 +3564,7 @@ function renderSheetToJpeg(sheet, i, num, o, W, H, mime, q) {
   }
   g.restore();
 
-  drawFooterAndPn(g, o, i, num, W, H);
+  if (!fullBleedCover) drawFooterAndPn(g, o, i, num, W, H);
   return c.toDataURL(mime || 'image/jpeg', q === undefined ? 0.94 : q);
 }
 
